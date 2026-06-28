@@ -1,6 +1,7 @@
 ---
 name: claude-cost-audit
 description: Audit recent Claude Code session costs and identify waste patterns. Use when the user asks "audit my claude cost", "how much am I spending", "check session costs", "analyze last week's claude usage". Parses local session JSONL files; produces a markdown report with top cost drivers and waste-pattern detection.
+scope: core
 ---
 
 # Claude Cost Audit

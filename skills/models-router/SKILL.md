@@ -4,6 +4,7 @@ description: Use BEFORE any tool call, sub-agent dispatch, or substantive respon
 last_validated: 2026-06-12
 validated_against: claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5
 notes: Re-validate after any Anthropic release that changes default reasoning effort or per-tier pricing. See docs/brain/claude-code-postmortem-2026-04-23.md for precedent.
+scope: core
 ---
 
 # Model Router

@@ -4,6 +4,7 @@ description: Use BEFORE any bulk read, sub-agent dispatch, or long output emissi
 last_validated: 2026-04-24
 validated_against: claude-opus-4-7 (main), claude-sonnet-4-6 (sub-agent)
 notes: Word caps (80 structural / 150 semantic / 200 RLM) ablated 2026-04-24 at N=2 (Kafka semantic + terraform structural); task-shape-aware caps added to references/scout-first.md. See docs/brain/claude-code-postmortem-2026-04-23.md for the empirical basis. Re-validate after any change to Anthropic sub-agent dispatch overhead or cache semantics.
+scope: core
 ---
 
 # Delegation Discipline
