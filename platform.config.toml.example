@@ -1,0 +1,22 @@
+# platform.config.toml — project-specific configuration for the claude-core harness.
+#
+# Copy to ~/.claude/platform.config.toml and edit for your project.
+# Loader: ~/.claude/lib/config_loader.py — absent fields fall back to its defaults.
+# Paths: use ~-relative notation; the loader expands ~ at load time.
+
+project_root   = "~/work/myproject"
+wiki_path      = "~/work/myproject/docs"
+workspace_glob = "~/work/*"
+repos          = []   # empty = autodiscover dirs under workspace_glob
+
+[jira]
+assignee = "you@example.com"
+email    = "you@example.com"
+epics    = []
+
+[cloud]
+aws_profiles = []   # e.g. ["prod", "stage"]
+gcp_clusters = []   # e.g. ["gke_project_region_cluster"]
+
+[slack]
+channels_ref = "~/.claude/skills/<your-slack-skill>/channels.yaml"
