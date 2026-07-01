@@ -1,9 +1,13 @@
-import json, sys, subprocess, importlib.util
+import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 MOD = Path(__file__).resolve().parents[1] / "lib" / "settings_merge.py"
 spec = importlib.util.spec_from_file_location("settings_merge", MOD)
-sm = importlib.util.module_from_spec(spec); spec.loader.exec_module(sm)
+sm = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sm)
 
 CD = "/home/u/.claude"   # a fixed claude-dir for deterministic command strings
 
@@ -41,7 +45,8 @@ def test_preserves_foreign_hooks_and_keys(tmp_path):
 def test_skip_already_registered(tmp_path):
     s = tmp_path / "settings.json"
     sm.merge(s, CD)
-    d = _load(s); n = len(d["hooks"]["PreToolUse"])
+    d = _load(s)
+    n = len(d["hooks"]["PreToolUse"])
     assert sm.merge(s, CD) == "unchanged"
     assert len(_load(s)["hooks"]["PreToolUse"]) == n     # no duplicate
 
@@ -50,7 +55,8 @@ def test_malformed_aborts_backs_up_and_leaves_original(tmp_path):
     s.write_text("{ this is not json ")
     orig = s.read_text()
     try:
-        sm.merge(s, CD); assert False, "should have raised SystemExit"
+        sm.merge(s, CD)
+        assert False, "should have raised SystemExit"
     except SystemExit as e:
         assert e.code == 2
     assert s.read_text() == orig                         # untouched

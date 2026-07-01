@@ -1,0 +1,11 @@
+# Lint config for the CI portability gate. Minimal + stable.
+target-version = "py311"
+line-length = 100
+
+[lint]
+# Default rule set (E, F) plus import sorting and pyupgrade — conservative, no surprises.
+select = ["E", "F", "I", "UP"]
+
+[lint.per-file-ignores]
+# Test files may keep intentionally-unused imports / long lines in fixtures.
+"tests/*" = ["E501"]
