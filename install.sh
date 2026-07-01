@@ -75,7 +75,26 @@ else
     echo "✓ Symlinked $CLAUDE_MD → $TRUNK"
 fi
 
-# ── e. Next steps ─────────────────────────────────────────────────────────────
+# ── e. Wiki submodule (REQUIRED) ─────────────────────────────────────────────
+WIKI_URL="$WIKI_URL_OVERRIDE"
+if [ -z "$WIKI_URL" ] && [ -f "$CLAUDE_DIR/lib/config_loader.py" ]; then
+    WIKI_URL="$(python3 "$CLAUDE_DIR/lib/config_loader.py" wiki_url 2>/dev/null || true)"
+fi
+if [ -d "$CORE_DIR/docs/core" ] && git -C "$CORE_DIR" submodule status docs/core >/dev/null 2>&1; then
+    echo "✓ docs/core submodule already present — leaving"
+elif [ -z "$WIKI_URL" ]; then
+    echo "FATAL: wiki_url not set. Pass --wiki-url <ssh-url> or set wiki_url in $CLAUDE_DIR/platform.config.toml" >&2
+    exit 1
+else
+    echo "→ Adding wiki submodule at docs/core ($WIKI_URL)..."
+    git -C "$CORE_DIR" submodule add -f "$WIKI_URL" docs/core \
+        || { echo "FATAL: failed to add wiki submodule (auth to $WIKI_URL?)" >&2; exit 1; }
+    git -C "$CORE_DIR" submodule update --init docs/core \
+        || { echo "FATAL: failed to init wiki submodule" >&2; exit 1; }
+    echo "✓ Wiki mounted at $CORE_DIR/docs/core"
+fi
+
+# ── f. Next steps ─────────────────────────────────────────────────────────────
 echo ""
 echo "=== Next steps ==="
 echo "1. Edit $CONFIG"
