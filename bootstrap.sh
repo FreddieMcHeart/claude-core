@@ -11,4 +11,13 @@ for s in models-router delegation-discipline claude-cost-audit; do
   [ -e "$link" ] && { echo "refusing to overwrite real dir $link"; exit 1; }
   ln -s "$target" "$link"; echo "linked $s"
 done
-echo "done. Wiki: clone claude-core-wiki, then in your vault: git submodule update --init core"
+CLAUDE_HOOKS="${CLAUDE_HOOKS:-$HOME/.claude/hooks}"
+mkdir -p "$CLAUDE_HOOKS"
+for h in cost-discipline.py; do
+  target="$CORE_DIR/hooks/$h"; link="$CLAUDE_HOOKS/$h"
+  [ -e "$target" ] || { echo "missing $target"; exit 1; }
+  [ -L "$link" ] && rm "$link"
+  [ -e "$link" ] && { echo "refusing to overwrite real file $link"; exit 1; }
+  ln -s "$target" "$link"; echo "linked hook $h"
+done
+echo "done. Next: (1) wire the hook into ~/.claude/settings.json (PreToolUse/PostToolUse/SessionStart/PostCompact); (2) add claude-core-wiki as a docs/core submodule; (3) run \'claude-relay init\' for relay."
