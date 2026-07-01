@@ -60,6 +60,17 @@ else
     echo "✓ Installed config_loader.py → $LOADER_DST"
 fi
 
+# c2. settings_merge.py — copy to ~/.claude/lib/ if absent
+MERGE_SRC="$CORE_DIR/lib/settings_merge.py"
+MERGE_DST="$CLAUDE_DIR/lib/settings_merge.py"
+if [ -f "$MERGE_DST" ]; then
+    echo "✓ $MERGE_DST already present — leaving"
+else
+    mkdir -p "$CLAUDE_DIR/lib"
+    cp "$MERGE_SRC" "$MERGE_DST"
+    echo "✓ Installed settings_merge.py → $MERGE_DST"
+fi
+
 # ── d. ~/.claude/CLAUDE.md — symlink to generic trunk only if absent ──────────
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 TRUNK="$CORE_DIR/CLAUDE.md"
@@ -94,7 +105,14 @@ else
     echo "✓ Wiki mounted at $CORE_DIR/docs/core"
 fi
 
-# ── f. Next steps ─────────────────────────────────────────────────────────────
+# ── f. Wire cost-discipline hook into settings.json (idempotent) ─────────────
+echo "→ Merging cost-discipline hook into settings.json..."
+python3 "$CORE_DIR/lib/settings_merge.py" \
+    --settings "$CLAUDE_DIR/settings.json" \
+    --claude-dir "$CLAUDE_DIR" \
+    || { echo "FATAL: settings.json merge failed (malformed JSON?)" >&2; exit 1; }
+
+# ── g. Next steps ─────────────────────────────────────────────────────────────
 echo ""
 echo "=== Next steps ==="
 echo "1. Edit $CONFIG"
