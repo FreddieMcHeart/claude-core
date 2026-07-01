@@ -112,14 +112,17 @@ python3 "$CORE_DIR/lib/settings_merge.py" \
     --claude-dir "$CLAUDE_DIR" \
     || { echo "FATAL: settings.json merge failed (malformed JSON?)" >&2; exit 1; }
 
-# ── g. Next steps ─────────────────────────────────────────────────────────────
+# ── g. Relay (opt-in) ─────────────────────────────────────────────────────────
+if [ "$WITH_RELAY" -eq 1 ]; then
+    echo "→ Installing claude-relay..."
+    uv tool install claude-relay || { echo "FATAL: uv tool install claude-relay failed" >&2; exit 1; }
+    claude-relay init || { echo "FATAL: claude-relay init failed" >&2; exit 1; }
+    echo "✓ Relay installed and initialized"
+else
+    echo "ℹ  Relay skipped (pass --with-relay to enable multi-session)"
+fi
+
+# ── h. Verify ─────────────────────────────────────────────────────────────────
 echo ""
-echo "=== Next steps ==="
-echo "1. Edit $CONFIG"
-echo "   Set: project_root, wiki_path, jira.email (at minimum)"
-echo "2. Add a knowledge-base submodule:"
-echo "   cd your-obsidian-vault && git submodule add <claude-core-wiki-url> docs/core"
-echo "3. Enable relay (optional):"
-echo "   claude-relay init     # installs relay hooks + inbox into ~/.claude"
-echo ""
-echo "Run ./doctor.sh to verify."
+echo "=== verifying (doctor) ==="
+exec "$CORE_DIR/doctor.sh"
