@@ -64,7 +64,7 @@ fi
 MERGE_SRC="$CORE_DIR/lib/settings_merge.py"
 MERGE_DST="$CLAUDE_DIR/lib/settings_merge.py"
 if [ -f "$MERGE_DST" ]; then
-    echo "✓ $MERGE_DST already present — leaving"
+    echo "✓ $MERGE_DST already present — leaving (no clobber)"
 else
     mkdir -p "$CLAUDE_DIR/lib"
     cp "$MERGE_SRC" "$MERGE_DST"
@@ -98,6 +98,8 @@ elif [ -z "$WIKI_URL" ]; then
     exit 1
 else
     echo "→ Adding wiki submodule at docs/core ($WIKI_URL)..."
+    # -f is required: /.gitmodules and /docs/core are git-ignored (keep the personal
+    # wiki URL out of tracked files); without -f git refuses the ignored path.
     git -C "$CORE_DIR" submodule add -f "$WIKI_URL" docs/core \
         || { echo "FATAL: failed to add wiki submodule (auth to $WIKI_URL?)" >&2; exit 1; }
     git -C "$CORE_DIR" submodule update --init docs/core \

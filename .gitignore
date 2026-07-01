@@ -1,2 +1,9 @@
 /.gitmodules
 /docs/core
+
+# python bytecode
+__pycache__/
+*.pyc
+
+# subagent-driven-development scratch
+/.superpowers/
