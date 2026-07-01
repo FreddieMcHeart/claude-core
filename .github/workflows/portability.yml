@@ -1,0 +1,51 @@
+name: portability
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  fresh-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout (no submodules — install.sh adds the wiki at runtime)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Create throwaway file:// wiki (no secrets)
+        run: |
+          set -euo pipefail
+          WIKI_DIR="${RUNNER_TEMP}/ci-wiki"
+          git init -q "$WIKI_DIR"
+          git -C "$WIKI_DIR" -c user.email=ci@example.com -c user.name=ci commit -q --allow-empty -m init
+          echo "# ci wiki" > "$WIKI_DIR/README.md"
+          git -C "$WIKI_DIR" add -A
+          git -C "$WIKI_DIR" -c user.email=ci@example.com -c user.name=ci commit -q -m readme
+          echo "WIKI_URL=file://$WIKI_DIR" >> "$GITHUB_ENV"
+
+      - name: Fresh-machine smoke (install + doctor + idempotency)
+        run: bash tests/smoke_install.sh
+
+      - name: Unit tests
+        run: |
+          python3 -m pip install --quiet --upgrade pip pytest
+          python3 -m pytest tests/ -v
+
+      - name: Lint
+        run: |
+          python3 -m pip install --quiet ruff
+          python3 -m ruff check lib tests
