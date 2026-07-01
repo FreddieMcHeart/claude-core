@@ -657,7 +657,7 @@ ck "hook symlinked"        '[ -L "$TMP/.claude/hooks/cost-discipline.py" ]'
 ck "config copied"         '[ -f "$TMP/.claude/platform.config.toml" ]'
 ck "settings has 4 events" 'python3 -c "import json;h=json.load(open(\"$TMP/.claude/settings.json\"))[\"hooks\"];exit(0 if all(e in h for e in [\"PreToolUse\",\"PostToolUse\",\"SessionStart\",\"PostCompact\"]) else 1)"'
 ck "wiki submodule present" '[ -n "$(ls -A "$CORE/docs/core" 2>/dev/null)" ]'
-ck "no /Users leak in settings" '! grep -q "/Users/" "$TMP/.claude/settings.json" || true'
+ck "no host /Users path in settings" '! grep -q "/Users/" "$TMP/.claude/settings.json"'
 
 echo "=== run 2 (idempotency) ==="
 cp "$TMP/.claude/settings.json" "$TMP/settings.before"
