@@ -31,6 +31,7 @@ CONFIG_PATH = Path("~/.claude/platform.config.toml").expanduser()
 _DEFAULTS: dict = {
     "project_root":   "~/work/myproject",
     "wiki_path":      "~/work/myproject/docs",
+    "wiki_url":       "",
     "workspace_glob": "~/work/*",
     "repos":          [],
     "jira": {

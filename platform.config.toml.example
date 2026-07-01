@@ -6,6 +6,7 @@
 
 project_root   = "~/work/myproject"
 wiki_path      = "~/work/myproject/docs"
+wiki_url       = "git@github.com:<you>/claude-core-wiki.git"   # SSH; mounted as docs/core submodule by install.sh
 workspace_glob = "~/work/*"
 repos          = []   # empty = autodiscover dirs under workspace_glob
 
