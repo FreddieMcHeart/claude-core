@@ -12,9 +12,23 @@ set -euo pipefail
 CORE_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 
-# --doctor flag: delegate and exit
-if [ "${1:-}" = "--doctor" ]; then
-    exec "$CORE_DIR/doctor.sh"
+WITH_RELAY=0
+WIKI_URL_OVERRIDE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --doctor)     exec "$CORE_DIR/doctor.sh" ;;
+        --with-relay) WITH_RELAY=1 ;;
+        --wiki-url)   WIKI_URL_OVERRIDE="${2:?--wiki-url needs a value}"; shift ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+# ── preflight ────────────────────────────────────────────────────────────────
+command -v git      >/dev/null 2>&1 || { echo "FATAL: git not found" >&2; exit 1; }
+command -v python3  >/dev/null 2>&1 || { echo "FATAL: python3 not found" >&2; exit 1; }
+if [ "$WITH_RELAY" -eq 1 ]; then
+    command -v uv >/dev/null 2>&1 || { echo "FATAL: --with-relay needs uv (https://docs.astral.sh/uv/)" >&2; exit 1; }
 fi
 
 echo "=== claude-core install ==="
