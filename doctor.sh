@@ -56,6 +56,34 @@ else
     _warn "platform_config" "$CLAUDE_DIR/platform.config.toml absent — run ./install.sh"
 fi
 
+# ── 5. cost-discipline hook registered in settings.json ──────────────────────
+CORE_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$CLAUDE_DIR/lib/settings_merge.py" ]; then
+    if python3 "$CLAUDE_DIR/lib/settings_merge.py" --settings "$CLAUDE_DIR/settings.json" --claude-dir "$CLAUDE_DIR" --check >/dev/null 2>&1; then
+        _pass "hook:cost-discipline registered"
+    else
+        _warn "hook:cost-discipline" "not fully registered in settings.json — run ./install.sh"
+    fi
+else
+    _warn "hook:cost-discipline" "settings_merge.py absent — run ./install.sh"
+fi
+
+# ── 6. docs/core wiki submodule resolves ─────────────────────────────────────
+if [ -d "$CORE_DIR/docs/core" ] && [ -n "$(ls -A "$CORE_DIR/docs/core" 2>/dev/null)" ]; then
+    _pass "wiki:docs/core submodule"
+else
+    _warn "wiki:docs/core" "submodule missing or empty — run ./install.sh (needs wiki_url)"
+fi
+
+# ── 7. relay hooks (only if relay is installed) ──────────────────────────────
+if command -v claude-relay >/dev/null 2>&1; then
+    if grep -q "relay-inbox.py" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
+        _pass "relay:hooks registered"
+    else
+        _warn "relay:hooks" "claude-relay installed but hooks not in settings.json — run 'claude-relay init'"
+    fi
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Summary: $PASS PASS, $WARN WARN"
