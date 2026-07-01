@@ -1,0 +1,272 @@
+<title>Harness Constellation — module &amp; wiring map</title>
+<style>
+  :root{
+    --paper:#eaeff5; --panel:#ffffff; --ink:#17212e; --muted:#5c6b7e;
+    --line:#d2dbe7; --line2:#e4eaf2;
+    --core:#4338ca; --wiki:#0f766e; --relay:#b45309; --harness:#475569;
+    --danger:#c5303a; --warn:#a9700f; --ok:#2f7a4e; --plan:#7c8aa0;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0}
+  .page{
+    max-width:1160px;margin:0 auto;padding:40px 24px 72px;
+    font-family:var(--sans);color:var(--ink);
+    background:
+      radial-gradient(circle at 1px 1px,rgba(90,110,140,.10) 1px,transparent 0) 0 0/22px 22px,
+      var(--paper);
+    line-height:1.5;
+  }
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
+  h1{font-size:34px;line-height:1.1;margin:6px 0 8px;text-wrap:balance;letter-spacing:-.01em}
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
+     margin:0 0 16px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  .lede{max-width:65ch;color:#37475b;font-size:15px;margin:0}
+  .meta{margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .banner{margin-top:16px;background:#e4f2ea;border:1px solid #b7dcc5;border-radius:6px;padding:12px 16px;
+     font-size:13.5px;color:#1f5c3c}
+  .banner b{color:#164a30}
+  section{margin-top:44px}
+
+  .diagwrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px}
+  svg{width:100%;height:auto;min-width:640px;display:block}
+  .legend{display:flex;flex-wrap:wrap;gap:18px;margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .lz{width:26px;height:0;border-top-width:2px;display:inline-block}
+
+  .chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
+  .chip{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
+  .chip .n{font-size:26px;font-variant-numeric:tabular-nums;font-weight:600;letter-spacing:-.02em}
+  .chip .l{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:3px}
+  .chip.good .n{color:var(--ok)}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0 18px 18px;position:relative;overflow:hidden}
+  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+  .card.core::before{background:var(--core)} .card.wiki::before{background:var(--wiki)}
+  .card.relay::before{background:var(--relay)} .card.harness::before{background:var(--harness)}
+  .card h3{font-family:var(--mono);font-size:15px;margin:18px 0 2px}
+  .card.core h3{color:var(--core)} .card.wiki h3{color:var(--wiki)}
+  .card.relay h3{color:var(--relay)} .card.harness h3{color:var(--harness)}
+  .path{font-family:var(--mono);font-size:12px;color:var(--muted);word-break:break-all}
+  .role{font-size:13.5px;color:#37475b;margin:12px 0}
+  .kv{font-family:var(--mono);font-size:11.5px;color:var(--muted);border-top:1px dashed var(--line);padding-top:10px;margin-top:4px}
+  .kv b{color:var(--ink);font-weight:600}
+  .tree{font-family:var(--mono);font-size:11.5px;white-space:pre;color:var(--muted);margin:10px 0 0;line-height:1.45}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line2);vertical-align:top}
+  th{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:#f2f5f9}
+  tr:last-child td{border-bottom:none}
+  td.m{font-family:var(--mono);font-size:12px;word-break:break-all}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:20px;white-space:nowrap}
+  .pill.ok{background:#e4f2ea;color:var(--ok)} .pill.broken{background:#f7e3e4;color:var(--danger)}
+  .pill.plan{background:#eceff3;color:var(--plan)} .pill.drift{background:#f6ecdb;color:var(--warn)}
+
+  .anoms{display:flex;flex-direction:column;gap:12px}
+  .anom{background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:6px;padding:14px 16px}
+  .anom.crit{border-left-color:var(--danger)} .anom.warn{border-left-color:var(--warn)}
+  .anom.info{border-left-color:var(--plan)} .anom.done{border-left-color:var(--ok);background:#f4faf6}
+  .anom .sev{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;font-weight:700}
+  .anom.crit .sev{color:var(--danger)} .anom.warn .sev{color:var(--warn)}
+  .anom.info .sev{color:var(--plan)} .anom.done .sev{color:var(--ok)}
+  .anom .t{font-weight:600;margin:3px 0 4px;font-size:14.5px}
+  .anom.done .t{color:#2a4a38}
+  .anom p{margin:0;font-size:13px;color:#37475b}
+  .anom code{font-family:var(--mono);font-size:12px;background:#f2f5f9;padding:1px 5px;border-radius:4px;word-break:break-all}
+
+  footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--muted)}
+  footer b{color:var(--ink)}
+  @media (prefers-reduced-motion:no-preference){.card,.anom{transition:transform .15s ease}}
+  .card:hover,.anom:hover{transform:translateY(-2px)}
+</style>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">Claude Code · Model-A · updated 2026-07-01</div>
+    <h1>Harness Constellation</h1>
+    <p class="lede">Four modules, four GitHub repos, one live runtime. This is where everything
+      lives, how the pieces wire together (symlink · submodule · editable-install · config), and
+      the anomaly board — now 4 of 5 resolved.</p>
+    <div class="meta">living document · <b>~/dev/claude-core/docs/harness-map.html</b> · regenerate by re-running the map scout</div>
+    <div class="banner"><b>Cleanup applied 2026-07-01.</b> Config repointed to <code>~/dev</code>, config_loader is now a symlink into core, the dead Mondu skills + project dirs were archived and pruned, and <code>~/.claude</code> is now backed up to a private repo. Only the relay location split (#4) remains, deferred by choice.</div>
+  </header>
+
+  <section>
+    <h2>Wiring diagram</h2>
+    <div class="diagwrap">
+      <svg viewBox="0 0 960 560" role="img" aria-label="Module wiring diagram">
+        <defs>
+          <marker id="aCore" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#4338ca"/></marker>
+          <marker id="aRelay" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#b45309"/></marker>
+          <marker id="aPlan" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#7c8aa0"/></marker>
+        </defs>
+
+        <line x1="415" y1="140" x2="185" y2="248" stroke="#4338ca" stroke-width="2" marker-end="url(#aCore)"/>
+        <text x="232" y="198" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="12" fill="#4338ca">symlink ×5</text>
+        <text x="232" y="213" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="#5c6b7e">skills · hook · loader</text>
+
+        <line x1="480" y1="140" x2="480" y2="248" stroke="#7c8aa0" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#aPlan)"/>
+        <text x="492" y="188" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="12" fill="#7c8aa0">submodule</text>
+        <text x="492" y="203" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="#7c8aa0">docs/core · PLANNED R2</text>
+
+        <line x1="545" y1="140" x2="795" y2="248" stroke="#b45309" stroke-width="2" marker-end="url(#aRelay)"/>
+        <text x="620" y="200" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="12" fill="#b45309">relay init + uv</text>
+
+        <!-- harness node -->
+        <rect x="330" y="44" width="300" height="96" rx="9" fill="#eef1f5" stroke="#475569" stroke-width="1.5"/>
+        <text x="480" y="80" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="16" font-weight="700" fill="#475569">~/.claude</text>
+        <text x="480" y="101" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="12" fill="#37475b">live harness · config → ~/dev</text>
+        <text x="480" y="120" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="11" fill="#2f7a4e">✓ backed up · FreddieMcHeart/claude-harness</text>
+
+        <!-- core -->
+        <rect x="40" y="248" width="260" height="122" rx="9" fill="#eef0fb" stroke="#4338ca" stroke-width="1.5"/>
+        <text x="170" y="284" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#4338ca">claude-core</text>
+        <text x="170" y="305" text-anchor="middle" font-size="12" fill="#37475b">source of truth</text>
+        <text x="170" y="324" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="#5c6b7e">~/dev/claude-core</text>
+        <text x="170" y="345" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="#5c6b7e">skills · hooks · installer</text>
+
+        <!-- wiki -->
+        <rect x="355" y="248" width="250" height="122" rx="9" fill="#e7f2f0" stroke="#0f766e" stroke-width="1.5"/>
+        <text x="480" y="284" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#0f766e">claude-core-wiki</text>
+        <text x="480" y="305" text-anchor="middle" font-size="12" fill="#37475b">methodology (~18 notes)</text>
+        <text x="480" y="324" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="#5c6b7e">~/dev/claude-core-wiki</text>
+        <text x="480" y="345" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="#5c6b7e">brain/</text>
+
+        <!-- relay -->
+        <rect x="670" y="248" width="250" height="122" rx="9" fill="#f8efe3" stroke="#b45309" stroke-width="1.5"/>
+        <text x="795" y="284" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#b45309">claude-relay</text>
+        <text x="795" y="305" text-anchor="middle" font-size="12" fill="#37475b">multi-session runtime</text>
+        <text x="795" y="324" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="#b45309">⚑ ~/mama/claude-relay (#4)</text>
+        <text x="795" y="345" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="#5c6b7e">python pkg · 161 tests</text>
+
+        <!-- archived workspace -->
+        <rect x="40" y="440" width="300" height="72" rx="9" fill="#eef1f4" stroke="#9aa7b6" stroke-width="1.5" stroke-dasharray="6 5"/>
+        <text x="190" y="470" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" font-weight="700" fill="#5c6b7e">~/mama/mondu · archived</text>
+        <text x="190" y="491" text-anchor="middle" font-size="11.5" fill="#5c6b7e">mondu-archive-2026-07-01.tar.gz</text>
+        <text x="190" y="507" text-anchor="middle" font-size="11" fill="#2f7a4e">✓ no live config references</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i class="lz" style="border-top:2px solid var(--core)"></i> symlink (active)</span>
+      <span><i class="lz" style="border-top:2px solid var(--relay)"></i> install / init</span>
+      <span><i class="lz" style="border-top:2px dashed var(--plan)"></i> planned (R2)</span>
+      <span><i class="lz" style="border-top:2px dashed #9aa7b6"></i> archived / inactive</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>At a glance</h2>
+    <div class="chips">
+      <div class="chip"><div class="n">4</div><div class="l">modules</div></div>
+      <div class="chip"><div class="n">4</div><div class="l">github repos</div></div>
+      <div class="chip"><div class="n">5</div><div class="l">active symlinks</div></div>
+      <div class="chip good"><div class="n">4</div><div class="l">anomalies resolved</div></div>
+      <div class="chip"><div class="n">1</div><div class="l">open (deferred)</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Modules</h2>
+    <div class="grid">
+      <div class="card core">
+        <h3>claude-core</h3>
+        <div class="path">~/dev/claude-core</div>
+        <div class="role">Source of truth. Generic skills (models-router, delegation-discipline, claude-cost-audit), CLAUDE.md trunk, cost-discipline hook, config template + loader, and the installer (bootstrap / install / doctor).</div>
+        <div class="tree">bootstrap.sh install.sh doctor.sh
+CLAUDE.md  platform.config.toml.example
+hooks/ (12)  lib/config_loader.py
+skills/ (symlink source)  docs/</div>
+        <div class="kv">origin <b>FreddieMcHeart/claude-core</b> · main · no submodules</div>
+      </div>
+
+      <div class="card wiki">
+        <h3>claude-core-wiki</h3>
+        <div class="path">~/dev/claude-core-wiki</div>
+        <div class="role">Methodology notes (~18 md in <span class="path">brain/</span>): cost-discipline, patterns, audits, tool evals. To be mounted into the harness as the <span class="path">docs/core</span> submodule — R2, not yet wired.</div>
+        <div class="tree">README.md
+brain/ (~18 .md)</div>
+        <div class="kv">origin <b>FreddieMcHeart/claude-core-wiki</b> · main · clean</div>
+      </div>
+
+      <div class="card relay">
+        <h3>claude-relay</h3>
+        <div class="path">~/mama/claude-relay &nbsp;⚑ location split (#4)</div>
+        <div class="role">Multi-session relay runtime (this parent↔children channel). Python package installed via editable <span class="path">uv tool</span> + <span class="path">claude-relay init</span>, which seeds ~/.claude/relay, the relay skill, hooks and commands.</div>
+        <div class="tree">pyproject.toml  uv.lock
+src/claude_relay/
+tests/ (~20 test_*.py)</div>
+        <div class="kv">origin <b>FreddieMcHeart/claude-relay</b> · main · clean · lives under ~/mama</div>
+      </div>
+
+      <div class="card harness">
+        <h3>~/.claude (harness)</h3>
+        <div class="path">~/.claude</div>
+        <div class="role">The live runtime. Real top-level entries + 5 symlinks into claude-core (skills, hook, loader), MEMORY, settings.json, platform.config.toml. Now backed up to a private repo via an allowlist .gitignore.</div>
+        <div class="tree">skills/ (5 links + real)
+hooks/ (1 link + real + sia/)
+lib/ (symlink)  commands/  projects/
+settings.json  MEMORY  platform.config.toml</div>
+        <div class="kv">origin <b style="color:var(--ok)">FreddieMcHeart/claude-harness (private)</b> · main · backed up ✓</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Wiring — every connection</h2>
+    <div class="diagwrap" style="padding:0">
+      <table>
+        <thead><tr><th>Mechanism</th><th>Source (in ~/.claude)</th><th>Target</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td class="m">symlink</td><td class="m">skills/models-router</td><td class="m">claude-core/skills/models-router</td><td><span class="pill ok">OK</span></td></tr>
+          <tr><td class="m">symlink</td><td class="m">skills/delegation-discipline</td><td class="m">claude-core/skills/delegation-discipline</td><td><span class="pill ok">OK</span></td></tr>
+          <tr><td class="m">symlink</td><td class="m">skills/claude-cost-audit</td><td class="m">claude-core/skills/claude-cost-audit</td><td><span class="pill ok">OK</span></td></tr>
+          <tr><td class="m">symlink</td><td class="m">hooks/cost-discipline.py</td><td class="m">claude-core/hooks/cost-discipline.py</td><td><span class="pill ok">OK</span></td></tr>
+          <tr><td class="m">symlink</td><td class="m">lib/config_loader.py</td><td class="m">claude-core/lib/config_loader.py</td><td><span class="pill ok">OK · fixed</span></td></tr>
+          <tr><td class="m">submodule</td><td class="m">docs/core</td><td class="m">claude-core-wiki</td><td><span class="pill plan">PLANNED · R2</span></td></tr>
+          <tr><td class="m">editable install</td><td class="m">~/.local/bin/claude-relay + .venv</td><td class="m">~/mama/claude-relay</td><td><span class="pill ok">OK</span></td></tr>
+          <tr><td class="m">relay init</td><td class="m">relay/ · skills/claude-relay · hooks/relay-*.py</td><td class="m">(from claude-relay pkg)</td><td><span class="pill ok">OK</span></td></tr>
+          <tr><td class="m">config ref</td><td class="m">platform.config.toml · project_root / wiki_path</td><td class="m">~/dev · ~/dev/claude-core-wiki</td><td><span class="pill ok">OK · fixed</span></td></tr>
+          <tr><td class="m">git remote</td><td class="m">~/.claude (allowlist .gitignore)</td><td class="m">FreddieMcHeart/claude-harness (private)</td><td><span class="pill ok">OK · fixed</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Anomaly board — 4 resolved · 1 deferred</h2>
+    <div class="anoms">
+      <div class="anom done">
+        <div class="sev">Resolved · 2026-07-01</div>
+        <div class="t">#1 — Config repointed off the deleted workspace</div>
+        <p><code>platform.config.toml</code> now sets <code>project_root = ~/dev</code> and <code>wiki_path = ~/dev/claude-core-wiki</code>; the Mondu Jira identity was cleared. <code>doctor.sh</code> resolves clean (7 PASS / 0 WARN).</p>
+      </div>
+      <div class="anom done">
+        <div class="sev">Resolved · 2026-07-01</div>
+        <div class="t">#2 — config_loader is now a symlink into core</div>
+        <p>The drifted copy was replaced by a symlink to <code>~/dev/claude-core/lib/config_loader.py</code>, matching skills/ and hooks/. The diff turned out purely cosmetic (docstring + defaults); core was already the generic version, so no logic needed porting. Core edits now reach the harness immediately.</p>
+      </div>
+      <div class="anom done">
+        <div class="sev">Resolved · 2026-07-01</div>
+        <div class="t">#3 — ~/.claude is now backed up</div>
+        <p>Pushed to private repo <code>FreddieMcHeart/claude-harness</code> behind an allowlist <code>.gitignore</code> (default-deny). A full-content secret scan of all 204 tracked files came back clean; transcripts, .env files, keys and caches stay ignored.</p>
+      </div>
+      <div class="anom done">
+        <div class="sev">Resolved · 2026-07-01</div>
+        <div class="t">#5 — Dead Mondu residue removed</div>
+        <p>4 <code>mondu-*</code> skill dirs and 10 dead project/session dirs were archived (to <code>~/mama/mondu-{skills,projects}-archive-2026-07-01.tar.gz</code>) then pruned. The active session dir and its 40 memory files were preserved untouched.</p>
+      </div>
+      <div class="anom info">
+        <div class="sev">Open · deferred by choice</div>
+        <div class="t">#4 — Location split: ~/dev vs ~/mama</div>
+        <p>claude-relay still lives in <code>~/mama</code> while core and wiki are in <code>~/dev</code>. Moving it mid-session would break the live relay channel and its two editable-install bindings, so it is deferred to end of session. When moved: <code>mv</code> + <code>uv tool install --editable --force</code> + <code>uv sync</code> to re-bind both.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <b>Living document.</b> Update by editing this file or re-running the harness map scout, then re-publishing.
+    Snapshot: 2026-07-01 · cleanup applied (4/5 resolved) · Model-A (versioned repos + symlinks + planned submodule).
+  </footer>
+</div>
