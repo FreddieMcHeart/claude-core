@@ -76,11 +76,11 @@ else
 fi
 
 # ── 7. relay hooks (only if relay is installed) ──────────────────────────────
-if command -v claude-relay >/dev/null 2>&1; then
+if command -v downbeat >/dev/null 2>&1; then
     if grep -q "relay-inbox.py" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
         _pass "relay:hooks registered"
     else
-        _warn "relay:hooks" "claude-relay installed but hooks not in settings.json — run 'claude-relay init'"
+        _warn "relay:hooks" "downbeat installed but hooks not in settings.json — run 'downbeat init'"
     fi
 fi
 

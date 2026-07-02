@@ -116,9 +116,9 @@ python3 "$CORE_DIR/lib/settings_merge.py" \
 
 # ── g. Relay (opt-in) ─────────────────────────────────────────────────────────
 if [ "$WITH_RELAY" -eq 1 ]; then
-    echo "→ Installing claude-relay..."
-    uv tool install claude-relay || { echo "FATAL: uv tool install claude-relay failed" >&2; exit 1; }
-    claude-relay init || { echo "FATAL: claude-relay init failed" >&2; exit 1; }
+    echo "→ Installing downbeat..."
+    uv tool install downbeat || { echo "FATAL: uv tool install downbeat failed" >&2; exit 1; }
+    downbeat init || { echo "FATAL: downbeat init failed" >&2; exit 1; }
     echo "✓ Relay installed and initialized"
 else
     echo "ℹ  Relay skipped (pass --with-relay to enable multi-session)"

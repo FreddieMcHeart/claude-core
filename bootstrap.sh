@@ -20,4 +20,4 @@ for h in cost-discipline.py; do
   [ -e "$link" ] && { echo "refusing to overwrite real file $link"; exit 1; }
   ln -s "$target" "$link"; echo "linked hook $h"
 done
-echo "done. Next: (1) wire the hook into ~/.claude/settings.json (PreToolUse/PostToolUse/SessionStart/PostCompact); (2) add claude-core-wiki as a docs/core submodule; (3) run \'claude-relay init\' for relay."
+echo "done. Next: (1) wire the hook into ~/.claude/settings.json (PreToolUse/PostToolUse/SessionStart/PostCompact); (2) add claude-core-wiki as a docs/core submodule; (3) run \'downbeat init\' for relay."
