@@ -40,6 +40,12 @@ jobs:
       - name: Fresh-machine smoke (install + doctor + idempotency)
         run: bash tests/smoke_install.sh
 
+      - name: Run migrate-to-plugin smoke test
+        run: bash tests/test_migrate_to_plugin.sh
+
+      - name: Run doctor.sh plugin-detection smoke test
+        run: bash tests/test_doctor_plugin_detection.sh
+
       - name: Unit tests
         run: |
           python3 -m pip install --quiet --upgrade pip pytest
