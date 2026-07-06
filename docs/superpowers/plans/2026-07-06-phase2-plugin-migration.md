@@ -71,7 +71,7 @@ def test_hooks_json_commands_and_matchers_match_legacy_table():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd ~/dev/claude-core && uv run pytest tests/test_plugin_manifest.py -v`
+Run: `cd ~/dev/claude-core && python3 -m pytest tests/test_plugin_manifest.py -v`
 Expected: FAIL — `FileNotFoundError` on `.claude-plugin/plugin.json` (doesn't exist yet).
 
 - [ ] **Step 3: Create the plugin manifest**
@@ -128,7 +128,7 @@ Write this to `hooks/hooks.json`.
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd ~/dev/claude-core && uv run pytest tests/test_plugin_manifest.py -v`
+Run: `cd ~/dev/claude-core && python3 -m pytest tests/test_plugin_manifest.py -v`
 Expected: `3 passed`
 
 - [ ] **Step 6: Commit**
@@ -279,7 +279,7 @@ def test_malformed_json_backs_up_and_exits_2(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd ~/dev/claude-core && uv run pytest tests/test_migrate_to_plugin.py -v`
+Run: `cd ~/dev/claude-core && python3 -m pytest tests/test_migrate_to_plugin.py -v`
 Expected: FAIL — `lib/migrate_to_plugin.py` doesn't exist (`ModuleNotFoundError`/spec load error).
 
 - [ ] **Step 3: Write the implementation**
@@ -393,7 +393,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd ~/dev/claude-core && uv run pytest tests/test_migrate_to_plugin.py -v`
+Run: `cd ~/dev/claude-core && python3 -m pytest tests/test_migrate_to_plugin.py -v`
 Expected: `7 passed`
 
 - [ ] **Step 5: Commit**
@@ -612,7 +612,7 @@ Also remove the now-dead "hook paths rooted at CLAUDE_DIR" assertion block (line
 Run each in sequence from `~/dev/claude-core`:
 
 ```bash
-uv run pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
 Expected: no `test_settings_merge` collection (file deleted) and all remaining tests pass.
 
@@ -844,7 +844,7 @@ Note: `test_doctor_plugin_detection.sh` fakes `claude` on `PATH` itself — it d
 
 - [ ] **Step 2: Verify locally what CI will run**
 
-Run: `cd ~/dev/claude-core && bash tests/smoke_install.sh && bash tests/test_migrate_to_plugin.sh && bash tests/test_doctor_plugin_detection.sh && uv run pytest tests/ -v && uv run ruff check .`
+Run: `cd ~/dev/claude-core && bash tests/smoke_install.sh && bash tests/test_migrate_to_plugin.sh && bash tests/test_doctor_plugin_detection.sh && python3 -m pytest tests/ -v && python3 -m ruff check lib tests`
 Expected: every command exits 0; `ruff check .` reports no issues (delete of `settings_merge.py`/`test_settings_merge.py` must not leave dangling imports elsewhere — confirm with a repo-wide grep: `grep -rn "settings_merge" --include="*.py" --include="*.sh" .` returns nothing outside `docs/`).
 
 - [ ] **Step 3: Commit**
