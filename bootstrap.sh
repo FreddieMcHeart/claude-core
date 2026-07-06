@@ -11,13 +11,4 @@ for s in models-router delegation-discipline claude-cost-audit; do
   [ -e "$link" ] && { echo "refusing to overwrite real dir $link"; exit 1; }
   ln -s "$target" "$link"; echo "linked $s"
 done
-CLAUDE_HOOKS="${CLAUDE_HOOKS:-$HOME/.claude/hooks}"
-mkdir -p "$CLAUDE_HOOKS"
-for h in cost-discipline.py; do
-  target="$CORE_DIR/hooks/$h"; link="$CLAUDE_HOOKS/$h"
-  [ -e "$target" ] || { echo "missing $target"; exit 1; }
-  [ -L "$link" ] && rm "$link"
-  [ -e "$link" ] && { echo "refusing to overwrite real file $link"; exit 1; }
-  ln -s "$target" "$link"; echo "linked hook $h"
-done
-echo "done. Next: (1) wire the hook into ~/.claude/settings.json (PreToolUse/PostToolUse/SessionStart/PostCompact); (2) add claude-core-wiki as a docs/core submodule; (3) run \'downbeat init\' for relay."
+echo "done. Next: (1) run 'claude plugin install <this-repo>/.claude-plugin' to register cost-discipline hooks; (2) add claude-core-wiki as a docs/core submodule; (3) run 'downbeat init' for relay."

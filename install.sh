@@ -14,11 +14,13 @@ CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 
 WITH_RELAY=0
 WIKI_URL_OVERRIDE=""
+MIGRATE_TO_PLUGIN=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --doctor)     exec "$CORE_DIR/doctor.sh" ;;
-        --with-relay) WITH_RELAY=1 ;;
-        --wiki-url)   WIKI_URL_OVERRIDE="${2:?--wiki-url needs a value}"; shift ;;
+        --doctor)             exec "$CORE_DIR/doctor.sh" ;;
+        --with-relay)         WITH_RELAY=1 ;;
+        --wiki-url)           WIKI_URL_OVERRIDE="${2:?--wiki-url needs a value}"; shift ;;
+        --migrate-to-plugin)  MIGRATE_TO_PLUGIN=1 ;;
         *) echo "unknown flag: $1" >&2; exit 2 ;;
     esac
     shift
@@ -29,6 +31,15 @@ command -v git      >/dev/null 2>&1 || { echo "FATAL: git not found" >&2; exit 1
 command -v python3  >/dev/null 2>&1 || { echo "FATAL: python3 not found" >&2; exit 1; }
 if [ "$WITH_RELAY" -eq 1 ]; then
     command -v uv >/dev/null 2>&1 || { echo "FATAL: --with-relay needs uv (https://docs.astral.sh/uv/)" >&2; exit 1; }
+fi
+
+if [ "$MIGRATE_TO_PLUGIN" -eq 1 ]; then
+    python3 "$CORE_DIR/lib/migrate_to_plugin.py" \
+        --settings "$CLAUDE_DIR/settings.json" \
+        --claude-dir "$CLAUDE_DIR" \
+        || { echo "FATAL: migration failed (malformed settings.json?)" >&2; exit 1; }
+    echo "→ Now run: claude plugin install $CORE_DIR/.claude-plugin"
+    exit 0
 fi
 
 echo "=== claude-core install ==="
@@ -58,17 +69,6 @@ else
     mkdir -p "$CLAUDE_DIR/lib"
     cp "$LOADER_SRC" "$LOADER_DST"
     echo "✓ Installed config_loader.py → $LOADER_DST"
-fi
-
-# c2. settings_merge.py — copy to ~/.claude/lib/ if absent
-MERGE_SRC="$CORE_DIR/lib/settings_merge.py"
-MERGE_DST="$CLAUDE_DIR/lib/settings_merge.py"
-if [ -f "$MERGE_DST" ]; then
-    echo "✓ $MERGE_DST already present — leaving (no clobber)"
-else
-    mkdir -p "$CLAUDE_DIR/lib"
-    cp "$MERGE_SRC" "$MERGE_DST"
-    echo "✓ Installed settings_merge.py → $MERGE_DST"
 fi
 
 # ── d. ~/.claude/CLAUDE.md — symlink to generic trunk only if absent ──────────
@@ -106,13 +106,6 @@ else
         || { echo "FATAL: failed to init wiki submodule" >&2; exit 1; }
     echo "✓ Wiki mounted at $CORE_DIR/docs/core"
 fi
-
-# ── f. Wire cost-discipline hook into settings.json (idempotent) ─────────────
-echo "→ Merging cost-discipline hook into settings.json..."
-python3 "$CORE_DIR/lib/settings_merge.py" \
-    --settings "$CLAUDE_DIR/settings.json" \
-    --claude-dir "$CLAUDE_DIR" \
-    || { echo "FATAL: settings.json merge failed (malformed JSON?)" >&2; exit 1; }
 
 # ── g. Relay (opt-in) ─────────────────────────────────────────────────────────
 if [ "$WITH_RELAY" -eq 1 ]; then

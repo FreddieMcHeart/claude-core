@@ -12,6 +12,27 @@ WARN=0
 _pass() { echo "PASS  $1"; PASS=$((PASS + 1)); }
 _warn() { echo "WARN  $1 — $2"; WARN=$((WARN + 1)); }
 
+# Returns 0 if a Claude Code plugin named "$1" is installed and enabled, 1 otherwise.
+# Fails safe: any missing `claude` binary, subprocess error, or bad JSON -> 1 (not
+# detected), never aborts doctor.sh itself.
+_plugin_enabled() {
+    local name="$1"
+    command -v claude >/dev/null 2>&1 || return 1
+    claude plugin list --json 2>/dev/null | python3 -c "
+import json, sys
+name = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for p in data:
+    pid = p.get('id', '')
+    if pid.split('@')[0] == name and p.get('enabled'):
+        sys.exit(0)
+sys.exit(1)
+" "$name"
+}
+
 # ── 1. Core skill symlinks ────────────────────────────────────────────────────
 for skill in models-router delegation-discipline claude-cost-audit; do
     link="$CLAUDE_DIR/skills/$skill"
@@ -56,16 +77,31 @@ else
     _warn "platform_config" "$CLAUDE_DIR/platform.config.toml absent — run ./install.sh"
 fi
 
-# ── 5. cost-discipline hook registered in settings.json ──────────────────────
+# ── 5. cost-discipline hook registered — via new plugin OR legacy hand-merge ──
 CORE_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$CLAUDE_DIR/lib/settings_merge.py" ]; then
-    if python3 "$CLAUDE_DIR/lib/settings_merge.py" --settings "$CLAUDE_DIR/settings.json" --claude-dir "$CLAUDE_DIR" --check >/dev/null 2>&1; then
-        _pass "hook:cost-discipline registered"
-    else
-        _warn "hook:cost-discipline" "not fully registered in settings.json — run ./install.sh"
-    fi
+_legacy_cost_discipline_present() {
+    [ -f "$CLAUDE_DIR/settings.json" ] || return 1
+    python3 -c "
+import json, sys
+try:
+    d = json.load(open('$CLAUDE_DIR/settings.json'))
+except Exception:
+    sys.exit(1)
+target = '$CLAUDE_DIR/hooks/cost-discipline.py'
+for grp_list in d.get('hooks', {}).values():
+    for grp in grp_list:
+        for h in grp.get('hooks', []):
+            if h.get('command', '').startswith(target):
+                sys.exit(0)
+sys.exit(1)
+"
+}
+if _plugin_enabled "claude-core-hooks"; then
+    _pass "hook:cost-discipline registered (claude-core-hooks plugin)"
+elif _legacy_cost_discipline_present; then
+    _pass "hook:cost-discipline registered (legacy hand-merge — consider: ./install.sh --migrate-to-plugin && claude plugin install $CORE_DIR/.claude-plugin)"
 else
-    _warn "hook:cost-discipline" "settings_merge.py absent — run ./install.sh"
+    _warn "hook:cost-discipline" "not registered — run: claude plugin install $CORE_DIR/.claude-plugin"
 fi
 
 # ── 6. docs/core wiki submodule resolves ─────────────────────────────────────
@@ -75,8 +111,8 @@ else
     _warn "wiki:docs/core" "submodule missing or empty — run ./install.sh (needs wiki_url)"
 fi
 
-# ── 7. relay hooks (only if relay is installed) ──────────────────────────────
-if command -v downbeat >/dev/null 2>&1; then
+# ── 7. relay hooks (only if downbeat is installed — CLI today, plugin someday) ─
+if command -v downbeat >/dev/null 2>&1 || _plugin_enabled "downbeat"; then
     if grep -q "relay-inbox.py" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
         _pass "relay:hooks registered"
     else
