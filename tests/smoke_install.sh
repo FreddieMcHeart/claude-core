@@ -32,23 +32,14 @@ echo "=== run 1 (fresh install) ==="
 HOME="$HOME_DIR" CLAUDE_DIR="$CLAUDE_DIR" bash "$CORE/install.sh" --wiki-url "$WIKI_URL" >/dev/null 2>&1 || true
 
 ck "skills symlinked"      '[ -L "$CLAUDE_DIR/skills/models-router" ]'
-ck "hook symlinked"        '[ -L "$CLAUDE_DIR/hooks/cost-discipline.py" ]'
 ck "config copied"         '[ -f "$CLAUDE_DIR/platform.config.toml" ]'
-ck "settings has 4 events" 'python3 -c "import json;h=json.load(open(\"$CLAUDE_DIR/settings.json\"))[\"hooks\"];exit(0 if all(e in h for e in [\"PreToolUse\",\"PostToolUse\",\"SessionStart\",\"PostCompact\"]) else 1)"'
+ck "fresh install writes no hooks" '[ ! -f "$CLAUDE_DIR/settings.json" ] || python3 -c "import json,sys; d=json.load(open(\"$CLAUDE_DIR/settings.json\")); sys.exit(1 if d.get(\"hooks\") else 0)"'
 ck "wiki submodule present" '[ -n "$(ls -A "$CORE/docs/core" 2>/dev/null)" ]'
-ck "hook paths rooted at CLAUDE_DIR" 'CLAUDE_DIR="$CLAUDE_DIR" python3 -c "
-import json, os, sys
-cd = os.environ[\"CLAUDE_DIR\"]
-d = json.load(open(os.path.join(cd, \"settings.json\")))
-cmds = [h.get(\"command\",\"\") for grp in d.get(\"hooks\",{}).values() for g in grp for h in g.get(\"hooks\",[])]
-cd_cmds = [c for c in cmds if \"cost-discipline\" in c]
-sys.exit(0 if cd_cmds and all(c.split()[0].startswith(cd) for c in cd_cmds) else 1)
-"'
 
 echo "=== run 2 (idempotency) ==="
-cp "$CLAUDE_DIR/settings.json" "$TMP/settings.before"
+[ -f "$CLAUDE_DIR/settings.json" ] && cp "$CLAUDE_DIR/settings.json" "$TMP/settings.before"
 HOME="$HOME_DIR" CLAUDE_DIR="$CLAUDE_DIR" bash "$CORE/install.sh" --wiki-url "$WIKI_URL" >/dev/null 2>&1 || true
-ck "settings unchanged on re-run" 'diff -q "$TMP/settings.before" "$CLAUDE_DIR/settings.json" >/dev/null'
+ck "settings unchanged on re-run" '[ ! -f "$TMP/settings.before" ] && [ ! -f "$CLAUDE_DIR/settings.json" ] || diff -q "$TMP/settings.before" "$CLAUDE_DIR/settings.json" >/dev/null'
 ck "no stray settings backup"     '[ -z "$(ls "$CLAUDE_DIR/"settings.json.bak-* 2>/dev/null)" ]'
 
 echo ""; [ "$FAIL" -eq 0 ] && echo "SMOKE: all pass" || echo "SMOKE: FAILURES"; exit "$FAIL"
