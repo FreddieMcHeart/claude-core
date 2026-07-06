@@ -164,12 +164,19 @@ step (skill symlinks, `platform.config.toml` copy, `config_loader.py` copy, `CLA
 symlink, wiki submodule, `--with-relay` opt-in) is unchanged.
 
 `doctor.sh`'s check #5 ("hook:cost-discipline registered") changes from invoking
-`settings_merge.py --check` to checking whether the plugin is installed and its hooks
-resolve — exact check mechanism (reading Claude Code's plugin state, e.g.
-`enabledPlugins`, vs. grepping `settings.json` for a `${CLAUDE_PLUGIN_ROOT}`-rooted
-command) is an implementation-time decision, since the precise on-disk format of
-`enabledPlugins` needs to be confirmed by direct inspection when the plan is written —
-not guessed here.
+`settings_merge.py --check` (deleted) to: PASS if **either** `claude plugin list --json`
+shows a plugin named `claude-core-hooks` enabled, **or** `settings.json` still contains
+one of the 4 legacy hand-merged `cost-discipline.py` command entries (the exact strings
+`settings_merge.py` used to write). This dual condition exists for the same reason as
+the check #7 fix below: a user who has this code merged but hasn't yet run
+`--migrate-to-plugin` + `claude plugin install` still has working hooks via the old
+mechanism, and check #5 must not falsely WARN during that legitimate transition window.
+Only WARN if neither condition holds (hooks genuinely missing either way).
+
+Direct inspection during planning (`claude plugin list --json`, verified live on this
+machine) confirms the exact format needed: each entry is `{"id": "<name>@<marketplace>",
+"enabled": true|false, ...}` — detection matches on the `id` string's segment before
+`@` equalling the target plugin name, with `enabled == true`.
 
 ## Composability with downbeat (optional integration, no hard dependency)
 
@@ -188,13 +195,21 @@ The only real integration point today is `doctor.sh` check #7 ("relay hooks"), a
 needed; the check can call `claude plugin list --json` directly, once, each time
 `doctor.sh` itself is run.
 
-1. `doctor.sh` check #7 switches from today's `command -v downbeat` to running
-   `claude plugin list --json` and checking whether a plugin named `downbeat` appears
-   as enabled.
-2. If `claude plugin list` isn't available at all (e.g. an unusually old Claude Code
-   version without the plugin system) or errors, treat that the same as "downbeat not
-   detected" — check #7 is simply skipped, exactly as it is today when `downbeat` isn't
-   on `PATH`. Never fail `doctor.sh` itself over this.
+1. `doctor.sh` check #7 keeps today's `command -v downbeat` check (verified live on
+   this machine: `downbeat` is currently a PyPI-installed CLI binary — `command -v
+   downbeat` succeeds — but no Claude Code plugin named `downbeat` exists yet; child-1
+   confirmed downbeat's own plugin work hasn't started). Dropping the CLI check in
+   favor of the plugin check alone would silently break detection on every real
+   downbeat install that exists today, since none of them are plugins yet.
+2. Add plugin-detection as an **additional OR-condition**, not a replacement: check #7
+   fires if `command -v downbeat` succeeds **OR** `claude plugin list --json` shows a
+   plugin whose name (before the `@marketplace` suffix) is `downbeat` and `enabled` is
+   true. This keeps today's real detection working and adds forward compatibility for
+   whenever downbeat ships its own plugin, without needing another change later.
+3. If `claude plugin list` isn't available at all (e.g. an unusually old Claude Code
+   version without the plugin system) or errors, that side of the OR is simply treated
+   as false — falls back to the `command -v downbeat` result alone, exactly as it
+   behaves today. Never fail `doctor.sh` itself over this.
 3. This stays genuinely optional in both directions: no `dependencies` entry in either
    plugin's manifest, no code in `cost-discipline.py`'s hot-path hook modes references
    downbeat at all.
