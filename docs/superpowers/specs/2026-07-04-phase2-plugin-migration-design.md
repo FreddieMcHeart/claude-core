@@ -27,10 +27,20 @@ separately, by its owner, on its own timeline.
   nothing breaks for an existing user who runs the new `install.sh` unmodified.
 - Add an optional, non-hard-dependency integration point with `downbeat`: claude-core and
   downbeat must each install and run fully standalone (no `dependencies` entry in either
-  `plugin.json`), but when both happen to be present on the same machine (as they are on
-  this one), claude-core's downbeat-aware content (the `cost-discipline.py` banner's
-  relay/RLM guidance, `doctor.sh`'s relay check) should activate automatically rather than
-  either always showing (confusing for users without downbeat) or requiring manual config.
+  `plugin.json`), but `doctor.sh`'s existing relay-awareness check (today: `command -v
+  downbeat` + grep for `relay-inbox.py` in settings.json — the one place claude-core
+  already conditionally reacts to downbeat's presence) should use the cleaner native
+  plugin-detection mechanism instead of shelling to the downbeat binary directly.
+
+  Correction (2026-07-06, caught before planning): an earlier draft of this goal also
+  proposed gating `cost-discipline.py`'s `FORCE_LOAD_RULES` banner content on downbeat
+  detection. Direct inspection of the live file found no downbeat/relay-specific content
+  there to gate — `grep -rn "downbeat\|relay-inbox\|claude-relay" hooks/ skills/` returns
+  zero matches in this repo. What that earlier draft was actually thinking of is
+  `rlm-fanout` (`~/.claude/workflows/rlm-fanout.js`, driven by the `/rlm` and
+  `/investigate` commands) — a self-contained Workflow-engine cross-repo investigation
+  tool that has no dependency on downbeat and must not be gated on it; it works the same
+  whether or not downbeat is installed. That part of the goal is dropped entirely.
 
 ## Non-goals
 
@@ -65,7 +75,7 @@ claude-core/
 └── tests/
     ├── test_settings_merge.py         # REMOVED (module gone)
     ├── test_migrate_to_plugin.sh      # NEW
-    └── test_downbeat_detection.sh     # NEW
+    └── test_doctor_downbeat_detection.sh  # NEW
 ```
 
 `hooks/hooks.json` reproduces `settings_merge.py`'s `HOOK_EVENTS` table exactly, in
@@ -172,42 +182,31 @@ discovery path instead: **`claude plugin list --json`**, which lists installed/e
 plugins by name and is explicitly the documented machine-readable way to check plugin
 state (there is no env var exposing this to hook commands directly).
 
-Shelling out to `claude plugin list --json` on every hook invocation is not viable —
-`PreToolUse`/`PostToolUse` fire on nearly every tool call, and adding a subprocess spawn
-+ JSON parse to that hot path is a real latency cost. Design:
+The only real integration point today is `doctor.sh` check #7 ("relay hooks"), and
+`doctor.sh` is a manual, infrequent, human-invoked health check — not a hot path like
+`PreToolUse`/`PostToolUse`. That means no caching or `SessionStart` involvement is
+needed; the check can call `claude plugin list --json` directly, once, each time
+`doctor.sh` itself is run.
 
-1. On `SessionStart` (already one of the 4 registered events), `cost-discipline.py`
-   shells out once to `claude plugin list --json`, checks whether a plugin named
-   `downbeat` appears as enabled, and writes the boolean result plus the session
-   timestamp to a small cache file at `${CLAUDE_PLUGIN_DATA}/downbeat-detected`.
-2. `PreToolUse`, `PostToolUse`, and `PostCompact` read only that cache file (a plain
-   file-existence/content check, no subprocess) before deciding whether to include
-   downbeat-specific content.
-3. The `FORCE_LOAD_RULES` banner's relay/RLM guidance (reader-agent delegation pattern,
-   cross-repo `/rlm` investigation flow) renders conditionally on the cached flag — a
-   user without downbeat installed never sees guidance for a mechanism they don't have.
-4. `doctor.sh` check #7 ("relay hooks") switches from today's `command -v downbeat` to
-   the same detection: either read the SessionStart-written cache if fresh, or (since
-   `doctor.sh` is a manual, infrequent, non-hot-path invocation) just call
-   `claude plugin list --json` directly itself — an extra subprocess call on a manual
-   health check is not a performance concern the way it is on every tool call.
-5. Cache freshness: valid for the lifetime of one session (recomputed on the next
-   `SessionStart`). If downbeat is installed or removed mid-session, the banner lags by
-   one session — acceptable, this is not a hot-reload feature.
-6. This is genuinely optional in both directions: if `claude plugin list` itself fails
-   or errors (e.g. an unusually old Claude Code version without the plugin system),
-   `cost-discipline.py` treats that as "downbeat not detected" and continues exactly as
-   it does today, rather than failing the hook.
+1. `doctor.sh` check #7 switches from today's `command -v downbeat` to running
+   `claude plugin list --json` and checking whether a plugin named `downbeat` appears
+   as enabled.
+2. If `claude plugin list` isn't available at all (e.g. an unusually old Claude Code
+   version without the plugin system) or errors, treat that the same as "downbeat not
+   detected" — check #7 is simply skipped, exactly as it is today when `downbeat` isn't
+   on `PATH`. Never fail `doctor.sh` itself over this.
+3. This stays genuinely optional in both directions: no `dependencies` entry in either
+   plugin's manifest, no code in `cost-discipline.py`'s hot-path hook modes references
+   downbeat at all.
 
 ## Testing
 
-**`tests/test_downbeat_detection.sh`** (new): fake a `claude` binary on `PATH` inside
-the isolated test `$HOME` that echoes a canned `plugin list --json` payload (one variant
-with `downbeat` enabled, one without); run the `SessionStart` mode of
-`cost-discipline.py` against each; assert the cache file's boolean matches, and that the
-`PreToolUse`/`PostToolUse` banner text includes or omits the relay/RLM section
-accordingly. Also test the fallback path: no `claude` binary on `PATH` at all → cache
-says "not detected", hook does not error or exit non-zero.
+**`tests/test_doctor_downbeat_detection.sh`** (new): fake a `claude` binary on `PATH`
+inside the isolated test `$HOME` that echoes a canned `plugin list --json` payload (one
+variant with `downbeat` enabled, one without); run `doctor.sh` against each and assert
+check #7 fires/skips accordingly. Also test the fallback path: no `claude` binary on
+`PATH` at all → check #7 is skipped, `doctor.sh` still exits based only on its other
+checks (never fails outright over a missing `claude` binary).
 
 **`tests/test_migrate_to_plugin.sh`** (new, replaces `tests/test_settings_merge.py`):
 - Fixture: hand-write a `settings.json` containing the exact legacy hook entries (same
