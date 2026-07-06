@@ -394,7 +394,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd ~/dev/claude-core && python3 -m pytest tests/test_migrate_to_plugin.py -v`
-Expected: `7 passed`
+Expected: `6 passed`
 
 - [ ] **Step 5: Commit**
 
