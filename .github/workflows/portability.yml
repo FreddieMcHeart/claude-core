@@ -17,12 +17,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout (no submodules — install.sh adds the wiki at runtime)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
