@@ -4,7 +4,7 @@ version = "0.1.0"
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-build_command = "python3 lib/bump_plugin_version.py"
+build_command = "python3 lib/bump_plugin_version.py && git add .claude-plugin/plugin.json"
 major_on_zero = false
 allow_zero_version = true
 tag_format = "v{version}"
