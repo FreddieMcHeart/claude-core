@@ -1,0 +1,43 @@
+name: release
+
+on:
+  workflow_run:
+    workflows: ["portability"]
+    types: [completed]
+
+# Uses default GITHUB_TOKEN — branch rulesets are unavailable on this private
+# free-tier repo (verified via gh api: both /rulesets and /branches/main/protection
+# return 403 "Upgrade to GitHub Pro or make this repository public"). Revisit with
+# a PAT (RELEASE_TOKEN secret) if/when this repo goes public and a ruleset with
+# required status checks is added on main — see downbeat's release.yml for the
+# pattern this repo hit there.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install python-semantic-release
+        run: python3 -m pip install --quiet --upgrade pip python-semantic-release
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          semantic-release version
+          semantic-release publish
