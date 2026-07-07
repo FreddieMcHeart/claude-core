@@ -1,0 +1,23 @@
+[project]
+name = "claude-core"
+version = "0.1.0"
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+build_command = "python3 lib/bump_plugin_version.py"
+major_on_zero = false
+allow_zero_version = true
+tag_format = "v{version}"
+commit_parser = "angular"
+
+[tool.semantic_release.changelog]
+changelog_file = "CHANGELOG.md"
+
+[tool.semantic_release.branches.main]
+match = "main"
+
+[tool.semantic_release.remote]
+type = "github"
+
+[tool.semantic_release.publish]
+upload_to_vcs_release = true
