@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.2.1 (2026-07-08)
+
+### Bug Fixes
+
+- Correct plugin install instructions to use marketplace add + install
+  ([`fb5fde0`](https://github.com/FreddieMcHeart/claude-core/commit/fb5fde01217489dc54a1476c0a7ae535d579f894))
+
+
 ## v0.2.0 (2026-07-07)
 
 ### Bug Fixes
