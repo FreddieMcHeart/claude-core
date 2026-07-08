@@ -1,0 +1,13 @@
+{
+  "name": "claude-core-local",
+  "owner": {
+    "name": "Nazarii Ahapevych"
+  },
+  "plugins": [
+    {
+      "name": "claude-core-hooks",
+      "source": ".",
+      "description": "Cost-discipline hook for Claude Code sessions: delegation reflexes, reader-agent nudges, model-tier awareness."
+    }
+  ]
+}

@@ -9,6 +9,14 @@ def test_plugin_json_shape():
     assert "version" in data
     assert "description" in data
 
+def test_marketplace_json_plugin_name_matches_plugin_json():
+    plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+    marketplace = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    assert len(marketplace["plugins"]) == 1
+    entry = marketplace["plugins"][0]
+    assert entry["name"] == plugin["name"]
+    assert entry["source"] == "."
+
 def test_hooks_json_covers_all_four_events():
     data = json.loads((ROOT / "hooks" / "hooks.json").read_text())
     hooks = data["hooks"]

@@ -38,7 +38,7 @@ if [ "$MIGRATE_TO_PLUGIN" -eq 1 ]; then
         --settings "$CLAUDE_DIR/settings.json" \
         --claude-dir "$CLAUDE_DIR" \
         || { echo "FATAL: migration failed (malformed settings.json?)" >&2; exit 1; }
-    echo "→ Now run: claude plugin install $CORE_DIR/.claude-plugin"
+    echo "→ Now run: claude plugin marketplace add $CORE_DIR && claude plugin install claude-core-hooks@claude-core-local"
     exit 0
 fi
 
