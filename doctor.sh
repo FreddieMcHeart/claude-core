@@ -99,9 +99,9 @@ sys.exit(1)
 if _plugin_enabled "claude-core-hooks"; then
     _pass "hook:cost-discipline registered (claude-core-hooks plugin)"
 elif _legacy_cost_discipline_present; then
-    _pass "hook:cost-discipline registered (legacy hand-merge — consider: ./install.sh --migrate-to-plugin && claude plugin install $CORE_DIR/.claude-plugin)"
+    _pass "hook:cost-discipline registered (legacy hand-merge — consider: ./install.sh --migrate-to-plugin && claude plugin marketplace add $CORE_DIR && claude plugin install claude-core-hooks@claude-core-local)"
 else
-    _warn "hook:cost-discipline" "not registered — run: claude plugin install $CORE_DIR/.claude-plugin"
+    _warn "hook:cost-discipline" "not registered — run: claude plugin marketplace add $CORE_DIR && claude plugin install claude-core-hooks@claude-core-local"
 fi
 
 # ── 6. docs/core wiki submodule resolves ─────────────────────────────────────

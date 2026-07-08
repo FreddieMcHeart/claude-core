@@ -27,7 +27,8 @@ git clone <this-repo> ~/dev/claude-core
 an alternative to hand-merging hook entries into `~/.claude/settings.json`:
 
 ```bash
-claude plugin install ~/dev/claude-core/.claude-plugin
+claude plugin marketplace add ~/dev/claude-core
+claude plugin install claude-core-hooks@claude-core-local
 ```
 
 Already ran the old installer and hand-merged the hooks yourself? Migrate cleanly
@@ -35,7 +36,8 @@ first, then install the plugin:
 
 ```bash
 ~/dev/claude-core/install.sh --migrate-to-plugin
-claude plugin install ~/dev/claude-core/.claude-plugin
+claude plugin marketplace add ~/dev/claude-core
+claude plugin install claude-core-hooks@claude-core-local
 ```
 
 Run `./doctor.sh` any time to check hook registration, plugin detection, and

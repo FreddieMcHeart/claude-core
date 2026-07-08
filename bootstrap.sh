@@ -11,4 +11,4 @@ for s in models-router delegation-discipline claude-cost-audit; do
   [ -e "$link" ] && { echo "refusing to overwrite real dir $link"; exit 1; }
   ln -s "$target" "$link"; echo "linked $s"
 done
-echo "done. Next: (1) run 'claude plugin install <this-repo>/.claude-plugin' to register cost-discipline hooks; (2) add claude-core-wiki as a docs/core submodule; (3) run 'downbeat init' for relay."
+echo "done. Next: (1) run 'claude plugin marketplace add <this-repo> && claude plugin install claude-core-hooks@claude-core-local' to register cost-discipline hooks; (2) add claude-core-wiki as a docs/core submodule; (3) run 'downbeat init' for relay."
