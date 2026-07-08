@@ -4,7 +4,7 @@ from settings.json ahead of switching to the native Claude Code plugin.
 
 Only removes hook entries whose exact `command` string matches what the old
 settings_merge.py wrote (`<claude_dir>/hooks/cost-discipline.py <mode>`, one of
-4 events, exact-string match only). Every other hook entry in settings.json —
+5 events, exact-string match only). Every other hook entry in settings.json —
 downbeat's relay-inbox.py, hand-added user hooks, anything else — is left
 untouched, byte-for-byte. A group left with zero hooks after removal is
 dropped entirely rather than left as a stray empty entry.
@@ -25,6 +25,7 @@ HOOK_EVENTS = [
     ("PostToolUse",  "post-tool"),
     ("SessionStart", "session-start"),
     ("PostCompact",  "post-compact"),
+    ("UserPromptSubmit", "user-prompt-submit"),
 ]
 
 

@@ -17,10 +17,12 @@ def test_marketplace_json_plugin_name_matches_plugin_json():
     assert entry["name"] == plugin["name"]
     assert entry["source"] == "."
 
-def test_hooks_json_covers_all_four_events():
+def test_hooks_json_covers_all_five_events():
     data = json.loads((ROOT / "hooks" / "hooks.json").read_text())
     hooks = data["hooks"]
-    assert set(hooks.keys()) == {"PreToolUse", "PostToolUse", "SessionStart", "PostCompact"}
+    assert set(hooks.keys()) == {
+        "PreToolUse", "PostToolUse", "SessionStart", "PostCompact", "UserPromptSubmit",
+    }
 
 def test_hooks_json_commands_and_matchers_match_legacy_table():
     data = json.loads((ROOT / "hooks" / "hooks.json").read_text())
@@ -30,6 +32,7 @@ def test_hooks_json_commands_and_matchers_match_legacy_table():
         "PostToolUse": ("Agent|Task|Workflow", "post-tool"),
         "SessionStart": ("startup|resume", "session-start"),
         "PostCompact": (None, "post-compact"),
+        "UserPromptSubmit": (None, "user-prompt-submit"),
     }
     for event, (matcher, mode) in expected.items():
         groups = hooks[event]

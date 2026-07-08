@@ -30,6 +30,13 @@
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/cost-discipline.py post-compact" }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/cost-discipline.py user-prompt-submit" }
+        ]
+      }
     ]
   }
 }
