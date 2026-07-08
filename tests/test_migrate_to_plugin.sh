@@ -36,6 +36,12 @@ data = {
         "PostCompact": [
             {"hooks": [{"type": "command", "command": cd_cmd("post-compact")}]},
         ],
+        "UserPromptSubmit": [
+            {"hooks": [
+                 {"type": "command", "command": f"{claude_dir}/hooks/relay-inbox.py"},
+                 {"type": "command", "command": cd_cmd("user-prompt-submit")},
+             ]},
+        ],
     }
 }
 open(path, "w").write(json.dumps(data, indent=2))
@@ -60,6 +66,14 @@ assert not any(\"cost-discipline.py\" in c for c in cmds)
 "'
 ck "PostCompact group dropped entirely" \
    'python3 -c "import json; d=json.load(open(\"'"$CLAUDE_DIR"'/settings.json\")); exit(0 if \"PostCompact\" not in d[\"hooks\"] else 1)"'
+ck "UserPromptSubmit keeps relay-inbox, drops cost-discipline" \
+   'python3 -c "
+import json
+d = json.load(open(\"'"$CLAUDE_DIR"'/settings.json\"))
+cmds = {h[\"command\"] for h in d[\"hooks\"][\"UserPromptSubmit\"][0][\"hooks\"]}
+assert \"'"$CLAUDE_DIR"'/hooks/relay-inbox.py\" in cmds
+assert not any(\"cost-discipline.py\" in c for c in cmds)
+"'
 ck "exactly one backup file" \
    '[ "$(ls "$CLAUDE_DIR"/settings.json.bak-* 2>/dev/null | wc -l | tr -d " ")" = "1" ]'
 

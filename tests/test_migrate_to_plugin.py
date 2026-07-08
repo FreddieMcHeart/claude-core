@@ -67,7 +67,7 @@ def test_removes_only_legacy_entry_from_mixed_group(tmp_path):
     }
 
 
-def test_removes_all_four_events(tmp_path):
+def test_removes_all_five_events(tmp_path):
     data = {
         "hooks": {
             "PreToolUse": [{"matcher": "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|Agent|Task|Workflow",
@@ -77,11 +77,12 @@ def test_removes_all_four_events(tmp_path):
             "SessionStart": [{"matcher": "startup|resume",
                                "hooks": [{"type": "command", "command": _legacy("session-start")}]}],
             "PostCompact": [{"hooks": [{"type": "command", "command": _legacy("post-compact")}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": _legacy("user-prompt-submit")}]}],
         }
     }
     p = _write(tmp_path, data)
     removed = mtp.migrate(p, CD)
-    assert removed == 4
+    assert removed == 5
     result = json.loads(p.read_text())
     assert result["hooks"] == {}
 
