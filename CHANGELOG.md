@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.2.2 (2026-07-08)
+
+### Bug Fixes
+
+- Add missing UserPromptSubmit event to plugin hooks.json and migrate_to_plugin.py
+  ([#3](https://github.com/FreddieMcHeart/claude-core/pull/3),
+  [`c5de9a7`](https://github.com/FreddieMcHeart/claude-core/commit/c5de9a774261547be1856cab8dae41586de29285))
+
+
 ## v0.2.1 (2026-07-08)
 
 ### Bug Fixes
