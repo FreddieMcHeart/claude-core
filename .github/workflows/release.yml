@@ -5,12 +5,13 @@ on:
     workflows: ["portability"]
     types: [completed]
 
-# Uses default GITHUB_TOKEN — branch rulesets are unavailable on this private
-# free-tier repo (verified via gh api: both /rulesets and /branches/main/protection
-# return 403 "Upgrade to GitHub Pro or make this repository public"). Revisit with
-# a PAT (RELEASE_TOKEN secret) if/when this repo goes public and a ruleset with
-# required status checks is added on main — see downbeat's release.yml for the
-# pattern this repo hit there.
+# Repo went public and a branch ruleset with required status checks was added
+# on main (2026-07). The ruleset's bypass is scoped to the RepositoryRole:Admin
+# role, which the default GITHUB_TOKEN's github-actions[bot] identity isn't
+# covered by — its version-bump push gets GH013-rejected. Same failure downbeat
+# hit; same fix: a fine-grained PAT (Contents: read/write, this repo only)
+# stored as the RELEASE_TOKEN secret, used for both checkout and the release
+# push/API calls.
 permissions:
   contents: write
 
@@ -26,6 +27,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -37,7 +39,7 @@ jobs:
 
       - name: Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           semantic-release version
           semantic-release publish
