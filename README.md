@@ -2,6 +2,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/FreddieMcHeart/claude-core/portability.yml?branch=main&label=ci)](https://github.com/FreddieMcHeart/claude-core/actions/workflows/portability.yml)
 [![Release](https://img.shields.io/github/v/release/FreddieMcHeart/claude-core)](https://github.com/FreddieMcHeart/claude-core/releases)
+[![License: MIT](https://img.shields.io/github/license/FreddieMcHeart/claude-core)](./LICENSE)
 
 Portable, project-agnostic Claude Code methodology — **no Mondu data**. The reusable
 "operating manual" you carry to every machine/project: cost-discipline reflexes,
@@ -65,3 +66,11 @@ creates a GitHub Release and syncs `.claude-plugin/plugin.json`'s version.
 
 Companion: `claude-core-wiki` (methodology notes, mounted as a `docs/core`
 submodule in any Obsidian vault).
+
+## Contributing
+
+Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for dev setup,
+commit conventions, and the DCO sign-off requirement. This project follows the
+[Contributor Covenant](./CODE_OF_CONDUCT.md). Found a security issue? See
+[SECURITY.md](./SECURITY.md) for private reporting instructions — please don't
+open a public issue.
