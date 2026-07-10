@@ -1,6 +1,6 @@
 [project]
 name = "claude-core"
-version = "0.2.2"
+version = "0.3.0"
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]

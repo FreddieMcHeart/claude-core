@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v0.3.0 (2026-07-10)
+
+### Bug Fixes
+
+- Address review nits on harvest.mjs ([#7](https://github.com/FreddieMcHeart/claude-core/pull/7),
+  [`b2aba6c`](https://github.com/FreddieMcHeart/claude-core/commit/b2aba6cb29e519eb556f7026d8796a5b1c972304))
+
+### Continuous Integration
+
+- Wire release.yml to RELEASE_TOKEN now that main has a ruleset
+  ([#6](https://github.com/FreddieMcHeart/claude-core/pull/6),
+  [`da26388`](https://github.com/FreddieMcHeart/claude-core/commit/da2638822a483689b357f61d02b778f40187c99a))
+
+### Documentation
+
+- Add OSS community files (LICENSE, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY)
+  ([#5](https://github.com/FreddieMcHeart/claude-core/pull/5),
+  [`46d1874`](https://github.com/FreddieMcHeart/claude-core/commit/46d18740d996d242edd48b2faf5d2e070b57ab04))
+
+### Features
+
+- **skills**: Add harvest — portable content-seed ideation skill+command
+  ([#7](https://github.com/FreddieMcHeart/claude-core/pull/7),
+  [`b2aba6c`](https://github.com/FreddieMcHeart/claude-core/commit/b2aba6cb29e519eb556f7026d8796a5b1c972304))
+
+
 ## v0.2.2 (2026-07-08)
 
 ### Bug Fixes
