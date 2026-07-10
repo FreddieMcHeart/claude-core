@@ -1,0 +1,4 @@
+{
+  "defaultCommits": 10,
+  "seedsDir": "/absolute/path/to/your/content-seeds"
+}
