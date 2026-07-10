@@ -48,6 +48,13 @@ that feel light-touch in the moment.
   main there is expected.
 - Run `git status` and `git diff` to understand current state. Never assume what changes
   exist.
+- **Never push directly to `main` (or the default branch), even for docs-only changes and
+  even when you hold admin/bypass rights on a branch ruleset.** Always land changes via a
+  PR + CI, same as any other contribution. Confirmed 2026-07-10 after a docs-reorg commit
+  was pushed straight to `main` on the (now-public) `claude-core` repo — it succeeded via
+  the admin bypass, but broke from the PR-based workflow used for every other change this
+  repo has seen (PR #3, #5, #6, #7). Bypass rights existing is not the same as bypass being
+  the intended path.
 - When asked to deprecate, remove, or clean up a service: clarify the exact scope before
   acting — "stop deployments", "delete code", "destroy infra", or all three have very
   different blast radii.
