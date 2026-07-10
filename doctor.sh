@@ -34,7 +34,7 @@ sys.exit(1)
 }
 
 # ── 1. Core skill symlinks ────────────────────────────────────────────────────
-for skill in models-router delegation-discipline claude-cost-audit; do
+for skill in models-router delegation-discipline claude-cost-audit harvest; do
     link="$CLAUDE_DIR/skills/$skill"
     if [ -L "$link" ] && [ -e "$link" ]; then
         _pass "skill:$skill"
@@ -42,6 +42,18 @@ for skill in models-router delegation-discipline claude-cost-audit; do
         _warn "skill:$skill" "dangling symlink — rerun ./bootstrap.sh"
     else
         _warn "skill:$skill" "missing — run ./install.sh"
+    fi
+done
+
+# ── 1b. Command symlinks ──────────────────────────────────────────────────────
+for cmd in harvest; do
+    link="$CLAUDE_DIR/commands/$cmd.md"
+    if [ -L "$link" ] && [ -e "$link" ]; then
+        _pass "command:/$cmd"
+    elif [ -L "$link" ]; then
+        _warn "command:/$cmd" "dangling symlink — rerun ./bootstrap.sh"
+    else
+        _warn "command:/$cmd" "missing — run ./bootstrap.sh"
     fi
 done
 
