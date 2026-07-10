@@ -6,7 +6,7 @@
 // Usage: node harvest.mjs [--commits N] [--since <git-date>]
 //   Default commit count comes from ~/.claude/harvest.config.json {"defaultCommits": N} (else 10).
 //   --commits N overrides it. --since "2 weeks ago" uses a date window instead of a count.
-// Node 22+, no deps.
+// Node 14+ (only uses ??, no other newer syntax), no deps.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -35,6 +35,9 @@ if (git(["rev-parse", "--is-inside-work-tree"]) !== "true") {
   const repo = git(["rev-parse", "--show-toplevel"]).split("/").pop();
   const total = parseInt(git(["rev-list", "--count", "HEAD"]) || "0", 10);
   const n = Math.min(commits, Math.max(total - 1, 0));  // HEAD~n needs n < total
+  // `git log -n` uses the raw `commits` value (not `n`): -n clamps to available
+  // history on its own, unlike `HEAD~n..HEAD` which errors if n >= total — so
+  // only the diff range below needs the clamped `n`.
   const range = since ? [`--since=${since}`] : ["-n", String(commits)];
   const log = git(["log", ...range, "--format=%h %ad %s", "--date=short"]);
   const stat = since
