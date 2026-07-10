@@ -119,9 +119,9 @@ Auto-apply on every task. Classify the task and select the matching pattern:
 | Spans 2+ repos + knowledge base has partial answers | `rlm-fanout-wiki-primed` | Knowledge-base primer scout → Haiku scouts with primer → Sonnet synth → wiki backflow |
 
 **Full protocol** (token budget, RLM fan-out steps, backflow procedure):
-`[[core/brain/investigation-patterns]]`.
+`[[core/brain/claude-core/investigation-patterns]]`.
 **Cost rules** (model routing, session scope, edit-loop, doc-gen delegation):
-`[[core/brain/claude-cost-patterns]]`.
+`[[core/brain/claude-core/claude-cost-patterns]]`.
 
 ## Partition + Map
 
@@ -240,9 +240,10 @@ Use instead:
 
 ## Strategy Memory
 
-After non-trivial tasks: save surprising strategies to `docs/brain/` (reasoning or
-cross-session patterns). Save user preferences/feedback to memory. Plans go to
-`docs/plans/`. See `[[core/brain/claude-code-patterns]]` for what's worth saving.
+After non-trivial tasks: save surprising strategies to `docs/core/brain/claude-core/`
+(reasoning or cross-session patterns) or `docs/core/brain/downbeat/` (relay/TUI-specific).
+Save user preferences/feedback to memory. Plans go to `docs/plans/`. See
+`[[core/brain/claude-core/claude-code-patterns]]` for what's worth saving.
 
 ## Wiki Integration
 
