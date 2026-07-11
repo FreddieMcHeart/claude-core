@@ -55,6 +55,28 @@ that feel light-touch in the moment.
   the admin bypass, but broke from the PR-based workflow used for every other change this
   repo has seen (PR #3, #5, #6, #7). Bypass rights existing is not the same as bypass being
   the intended path.
+- **`claude-core-wiki` has two independent checkouts on this machine — edit only
+  `~/dev/claude-core-wiki`, never `~/dev/claude-core/docs/core` directly, and MUST
+  sync the mirror as the LAST step of every wiki edit, in the same turn, unprompted.**
+  The submodule mount at `docs/core/` and the standalone clone at `~/dev/claude-core-wiki`
+  are separate `git` working copies of the same remote
+  (`github.com/FreddieMcHeart/claude-core-wiki`). `~/dev/claude-core-wiki` has a real
+  `.obsidian/` and is the vault actually opened in the Obsidian app — it is the one true
+  working copy. `docs/core/` is a read-only mirror.
+
+  **Required sequence for every `claude-core-wiki` change, no exceptions:**
+  1. Edit + commit + push from `~/dev/claude-core-wiki` only.
+  2. Immediately: `cd ~/dev/claude-core/docs/core && git pull origin main -q`.
+  3. Confirm both `git log -1 --oneline` outputs match before considering the task done.
+
+  Step 2 is not optional and not something to do "if there's time" — a wiki task that
+  ends after step 1 is incomplete. Editing the submodule copy instead of the standalone
+  clone silently desyncs from what's visible in Obsidian — confirmed 2026-07-10, cost a
+  whole debugging detour before being caught. Also: before any `git add -A` in
+  `claude-core-wiki`, check `git status --short` for unexpected files first — untracked
+  Obsidian app-state (`.obsidian/*.json` besides `community-plugins.json`,
+  `Untitled*.canvas`) should never be committed; the same incident swept some of that in
+  before being caught and cleaned up.
 - When asked to deprecate, remove, or clean up a service: clarify the exact scope before
   acting — "stop deployments", "delete code", "destroy infra", or all three have very
   different blast radii.
