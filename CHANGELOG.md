@@ -2,6 +2,36 @@
 
 <!-- version list -->
 
+## v0.3.1 (2026-07-13)
+
+### Bug Fixes
+
+- Update commit-workflow nudge text to the generic commit-commands plugin
+  ([#10](https://github.com/FreddieMcHeart/claude-core/pull/10),
+  [`d1356c4`](https://github.com/FreddieMcHeart/claude-core/commit/d1356c4fa173a57be05edfa52658adacbd29dc66))
+
+### Documentation
+
+- Add never-push-directly-to-main rule after admin-bypass docs push
+  ([#8](https://github.com/FreddieMcHeart/claude-core/pull/8),
+  [`4a8d980`](https://github.com/FreddieMcHeart/claude-core/commit/4a8d980e02bea38fbb98a650d9913e53e861f2a6))
+
+- Document claude-core-wiki canonical-copy convention (edit standalone clone, not submodule)
+  ([#9](https://github.com/FreddieMcHeart/claude-core/pull/9),
+  [`3f38867`](https://github.com/FreddieMcHeart/claude-core/commit/3f388672ca630397dc9fee4709869311b16907f6))
+
+- Document wiki canonical-copy convention
+  ([#9](https://github.com/FreddieMcHeart/claude-core/pull/9),
+  [`3f38867`](https://github.com/FreddieMcHeart/claude-core/commit/3f388672ca630397dc9fee4709869311b16907f6))
+
+- Split wiki brain/ by project (claude-core vs downbeat), fix path references
+  ([`a499622`](https://github.com/FreddieMcHeart/claude-core/commit/a4996224be812065ad911aa86cdc448ad25fc86f))
+
+- Strengthen wiki-mirror sync into a required last-step, not a suggestion
+  ([#9](https://github.com/FreddieMcHeart/claude-core/pull/9),
+  [`3f38867`](https://github.com/FreddieMcHeart/claude-core/commit/3f388672ca630397dc9fee4709869311b16907f6))
+
+
 ## v0.3.0 (2026-07-10)
 
 ### Bug Fixes

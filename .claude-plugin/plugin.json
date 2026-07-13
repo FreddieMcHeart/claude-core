@@ -1,5 +1,5 @@
 {
   "name": "claude-core-hooks",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Cost-discipline hook for Claude Code sessions: delegation reflexes, reader-agent nudges, model-tier awareness."
 }
