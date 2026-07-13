@@ -1064,11 +1064,12 @@ def handle_pre_tool(payload):
                     f"🛑 Mechanical-Bash on Opus: {streak} consecutive routine Bash calls. "
                     "Each costs ~$0.029 on Opus vs ~$0.006 on Sonnet — 5× surcharge for work "
                     "that doesn't need Opus reasoning. Switch to `/model sonnet` NOW for this "
-                    "phase. For git workflows: use your project's commit / commit-push-PR slash commands "
-                    "(auto-extracts `[TICKET]`, detects cicd→next vs main, bundles "
-                    "status/diff/branch as pre-loaded context — 3-5× cheaper per commit than "
-                    "ad-hoc Bash). Staying on Opus is only justified if the next step requires "
-                    "cross-repo reasoning or architecture-level synthesis.")
+                    "phase. For git workflows: use the `commit-commands` plugin's `/commit` / "
+                    "`/commit-push-pr` (bundles status/diff/branch as pre-loaded context in "
+                    "one pass — 3-5× cheaper per commit than ad-hoc Bash). Project-specific "
+                    "ticket/branch conventions belong in that project's own CLAUDE.md, not a "
+                    "bespoke slash command. Staying on Opus is only justified if the next step "
+                    "requires cross-repo reasoning or architecture-level synthesis.")
             elif streak == MECH_BASH_ESCALATION:
                 est_waste = streak * 0.023
                 fire_once(state, "bash_on_opus_routine_8",
@@ -1411,8 +1412,9 @@ def handle_post_compact(payload):
         "`kubectl-reader` (Haiku). For gh pr/run/repo reads, dispatch `gh-reader`. "
         "For Slack reads, `slack-reader`. For Datadog, `datadog-reader`. "
         "For Jira reads (getJiraIssue/searchJiraIssuesUsingJql/transitions), dispatch `jira-reader`.\n"
-        "4. **Git workflows**: your project's commit / commit-push-PR slash commands are "
-        "cheaper than ad-hoc Bash chains and enforce `[TICKET]` conventions.\n\n"
+        "4. **Git workflows**: default to the `commit-commands` plugin's `/commit` / "
+        "`/commit-push-pr` — cheaper than ad-hoc Bash chains. Project-specific ticket/PR "
+        "conventions live in that project's own CLAUDE.md, not a bespoke slash command.\n\n"
         "Do not skip this re-routing on the assumption that prior invocations cover "
         "the remaining work — they don't. The summary lost the per-call routing state."
     )
