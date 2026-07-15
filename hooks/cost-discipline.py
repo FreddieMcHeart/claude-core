@@ -772,7 +772,8 @@ def hygiene_scan(repo=None):
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo), "status", "--porcelain", "-z", "-uall"],
-            capture_output=True, text=True, timeout=HYGIENE_GIT_TIMEOUT,
+            capture_output=True, text=True, errors="surrogateescape",
+            timeout=HYGIENE_GIT_TIMEOUT,
         )
         if proc.returncode != 0:
             return None
@@ -791,16 +792,19 @@ def hygiene_scan(repo=None):
         status, path = record[:2], record[3:]
         if status[0] in ("R", "C"):
             i += 1  # a rename/copy record is followed by its origin path — consume it
-        if "D" in status:
-            # Deleted: there is no file to stat, and a deletion cannot be stale.
-            entries.append((path, 0))
-            continue
+        # Deliberately NO special-case on a "D" status. Every genuinely absent
+        # path (`D `, `DD`, `AD`, `MD`, `RD`) already lands in the OSError branch
+        # below and reads as age 0. The only statuses a "D" test would change are
+        # the unmerged ones — `UD`/`DU`, a modify/delete conflict — and those
+        # LEAVE OUR VERSION IN THE WORKTREE. Zeroing them hides a real file that
+        # can be arbitrarily stale, which is the exact "unknown -> fresh" failure
+        # this scan exists to avoid. Let stat() decide: it knows what is on disk.
         try:
             mtime = (repo / path).stat().st_mtime
             age = max(0, int((now - mtime) // 86400))
         except OSError:
-            # Exceptional now that -z removes quoting. Bias to 0 rather than
-            # inventing an age, but this branch should effectively never run.
+            # The path is gone (a deletion) or unreadable. A deletion cannot be
+            # stale, so 0 is right; -z makes an unreadable path near-impossible.
             age = 0
         entries.append((path, age))
 

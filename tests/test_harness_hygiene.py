@@ -132,6 +132,38 @@ def test_scan_expands_untracked_directories(tmp_path):
     assert oldest == 21, "the directory's own mtime must not mask the files' age"
 
 
+def test_scan_ages_unmerged_conflict_file_that_still_exists(tmp_path):
+    """A modify/delete conflict reports UD/DU but LEAVES OUR VERSION on disk.
+
+    Regression: a `"D" in status -> age 0` shortcut looks reasonable (a deletion
+    cannot be stale) but is wrong for exactly these states, and is redundant for
+    every other D status — real deletions already fall to the OSError branch.
+    The shortcut zeroed a file that exists and can be arbitrarily old, which is
+    the "unknown -> fresh" failure this whole section exists to prevent.
+    """
+    repo = _git_repo(tmp_path)
+    (repo / "f.txt").write_text("base")
+    subprocess.run(["git", "-C", str(repo), "add", "f.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "other"], check=True)
+    subprocess.run(["git", "-C", str(repo), "rm", "-q", "f.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "delete"], check=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-"], check=True)
+    (repo / "f.txt").write_text("ours")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qam", "modify"], check=True)
+    subprocess.run(["git", "-C", str(repo), "merge", "other"], capture_output=True)
+
+    assert (repo / "f.txt").exists(), "fixture: the conflict must leave our version on disk"
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                            capture_output=True, text=True).stdout
+    assert "D" in status.split()[0], f"fixture: expected an unmerged D status, got {status!r}"
+
+    t = time.time() - 40 * DAY - 3600
+    os.utime(repo / "f.txt", (t, t))
+    _, oldest, _ = cd.hygiene_scan(repo)
+    assert oldest == 40, "an unmerged file that exists on disk must be aged, not zeroed"
+
+
 def test_scan_mixed_pile_counts_and_ages_correctly(tmp_path):
     """End-to-end: the three traps together must not under-report."""
     repo = _git_repo(tmp_path)
