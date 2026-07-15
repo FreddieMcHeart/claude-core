@@ -749,15 +749,29 @@ def hygiene_scan(repo=None):
     repo, git missing, git failing, or git too slow. Fail-open by design: a
     hygiene nudge is never worth delaying or breaking a prompt.
 
-    Age comes from mtime. For a directory entry that is the directory's own mtime
-    (which moves when entries are added or removed) rather than a walk of its
-    contents — the harness dir carries hundreds of MB of ignored transcripts and
-    walking it on a prompt would cost more than the nudge is worth.
+    Two git flags carry the whole correctness of this function:
+
+    `-z`   — porcelain QUOTES paths containing spaces or non-ASCII by default
+             (core.quotePath), so `my old notes.txt` arrives as `"my old
+             notes.txt"`, quotes included. stat() then fails on the literal
+             quotes and the entry silently reads as age 0 — a stale file
+             invisible to the age threshold. -z emits raw NUL-separated paths
+             and never quotes. It also splits renames across two records
+             (`R  new\\0orig\\0`), which the loop below consumes.
+
+    `-uall` — porcelain defaults to -unormal, which COLLAPSES an untracked
+             directory into a single entry (`?? some_dir/`). Forty abandoned
+             files then count as one, and the stat hits the directory, whose
+             mtime moves on every add/remove, so age reads ~0. Both thresholds
+             go blind to exactly the pile this function exists to find.
+             Measured on the real harness (445MB of ignored transcripts):
+             -uall costs nothing — 0.017s vs 0.020s — because git skips ignored
+             trees regardless of the flag.
     """
     repo = HARNESS_DIR if repo is None else Path(repo)
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), "status", "--porcelain"],
+            ["git", "-C", str(repo), "status", "--porcelain", "-z", "-uall"],
             capture_output=True, text=True, timeout=HYGIENE_GIT_TIMEOUT,
         )
         if proc.returncode != 0:
@@ -767,15 +781,27 @@ def hygiene_scan(repo=None):
 
     now = time.time()
     entries = []
-    for line in proc.stdout.splitlines():
-        path = line[3:].strip()
-        if not path:
+    fields = proc.stdout.split("\0")
+    i = 0
+    while i < len(fields):
+        record = fields[i]
+        i += 1
+        if len(record) < 4:
+            continue  # trailing empty field, or malformed
+        status, path = record[:2], record[3:]
+        if status[0] in ("R", "C"):
+            i += 1  # a rename/copy record is followed by its origin path — consume it
+        if "D" in status:
+            # Deleted: there is no file to stat, and a deletion cannot be stale.
+            entries.append((path, 0))
             continue
         try:
-            mtime = (repo / path.rstrip("/")).stat().st_mtime
+            mtime = (repo / path).stat().st_mtime
             age = max(0, int((now - mtime) // 86400))
         except OSError:
-            age = 0  # deleted file — no mtime; never let it dominate "oldest"
+            # Exceptional now that -z removes quoting. Bias to 0 rather than
+            # inventing an age, but this branch should effectively never run.
+            age = 0
         entries.append((path, age))
 
     if not entries:

@@ -77,6 +77,76 @@ def test_scan_deleted_file_does_not_dominate_oldest(tmp_path):
     assert oldest == 0
 
 
+# ---------------- scan: the parse traps (regressions, all found in review) ----------------
+# Each of these failed the first implementation, and all failed the SAME way:
+# the entry silently read as age 0, so a stale file was invisible to the age
+# threshold. A staleness detector that defaults unknown -> fresh is worse than none.
+
+def test_scan_handles_paths_with_spaces(tmp_path):
+    """porcelain quotes paths with spaces by default; -z must defeat that."""
+    repo = _git_repo(tmp_path)
+    _dirty(repo, "my old notes.txt", age_days=30)
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 1
+    assert oldest == 30, "a quoted path must still resolve to a real mtime"
+    assert samples[0][0] == "my old notes.txt", "path must arrive unquoted"
+
+
+def test_scan_handles_unicode_paths(tmp_path):
+    """core.quotePath escapes non-ASCII as octal (\\303\\251); -z must defeat that."""
+    repo = _git_repo(tmp_path)
+    _dirty(repo, "café-notes.txt", age_days=12)
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 1
+    assert oldest == 12
+    assert samples[0][0] == "café-notes.txt"
+
+
+def test_scan_handles_renames(tmp_path):
+    """A rename is TWO NUL records (new, then origin). The origin must be consumed,
+    not counted as a second dirty file."""
+    repo = _git_repo(tmp_path)
+    p = _dirty(repo, "orig.txt")
+    subprocess.run(["git", "-C", str(repo), "add", "orig.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), "mv", "orig.txt", "renamed.txt"], check=True)
+    count, _, samples = cd.hygiene_scan(repo)
+    assert count == 1, "the rename origin must not be counted as its own entry"
+    assert samples[0][0] == "renamed.txt"
+    assert p.name not in [s[0] for s in samples]
+
+
+def test_scan_expands_untracked_directories(tmp_path):
+    """-unormal collapses an untracked dir to ONE entry and stats the dir (whose
+    mtime moves on every write), hiding both count and age. -uall expands it."""
+    repo = _git_repo(tmp_path)
+    d = repo / "abandoned_skill"
+    d.mkdir()
+    for i in range(12):
+        f = d / f"f{i}.txt"
+        f.write_text("x")
+        t = time.time() - 21 * DAY - 3600
+        os.utime(f, (t, t))
+    count, oldest, _ = cd.hygiene_scan(repo)
+    assert count == 12, "each abandoned file must count, not the directory as one"
+    assert oldest == 21, "the directory's own mtime must not mask the files' age"
+
+
+def test_scan_mixed_pile_counts_and_ages_correctly(tmp_path):
+    """End-to-end: the three traps together must not under-report."""
+    repo = _git_repo(tmp_path)
+    _dirty(repo, "plain.txt", age_days=1)
+    _dirty(repo, "with space.txt", age_days=40)
+    d = repo / "dir"
+    d.mkdir()
+    for i in range(3):
+        _dirty(repo, f"dir/n{i}.txt", age_days=2)
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 5
+    assert oldest == 40
+    assert samples[0] == ("with space.txt", 40)
+
+
 # ---------------- thresholds ----------------
 
 def _ctx(monkeypatch, count, oldest, prompts_seen=1):
