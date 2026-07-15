@@ -17,12 +17,35 @@
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
 STATE_DIR = Path("/tmp")
+
+# ---- Harness hygiene (2026-07-15) ----
+# The harness repo (~/.claude) is edited from many concurrent sessions, and sessions
+# rarely end cleanly — they are left open or killed — so any "commit on exit" nudge
+# fires for almost nobody. Instead we pulse on prompt submit, which is the one event
+# that reliably happens while the human is actually there.
+#
+# Throttle: fire on the FIRST prompt of a session and every Nth prompt after. Because
+# handle_session_start() wipes state, prompts_seen restarts at 0 each session, so the
+# first-prompt fire doubles as the session-start backstop — one mechanism covers both
+# "you have been working a while without committing" and "you walked into an old pile".
+#
+# Thresholds are pile-level, not session-level, on purpose: the pile is what the human
+# reasons about, and every file in it belongs to the same person regardless of which
+# session created it.
+HARNESS_DIR = Path.home() / ".claude"
+HYGIENE_PROMPT_INTERVAL = 10   # check on prompt 1, 11, 21, ...
+HYGIENE_MAX_FILES = 10         # dirty-file count above which we nudge
+HYGIENE_MAX_AGE_DAYS = 7       # oldest dirty-file age above which we nudge
+HYGIENE_GIT_TIMEOUT = 3        # seconds — a slow repo must never delay a prompt
+HYGIENE_SAMPLE_COUNT = 3       # how many oldest paths to name in the nudge
 # Session JSONLs live at ~/.claude/projects/<cwd-slug>/<session_id>.jsonl; the slug is
 # project-specific, so jsonl_size() globs across all projects rather than hardcoding one.
 
@@ -325,6 +348,7 @@ def new_state(session_id):
         "reader_violations": {},  # I4: per-family inline-read violation count (post-first-fire)
         "read_streak": 0,         # consecutive read-only tool calls (hard-block tier, 2026-06-27)
         "last_router_call": -999, # tool_calls_total index when models-router Skill last ran
+        "prompts_seen": 0,        # UserPromptSubmit count; throttles the harness-hygiene pulse
     }
 
 
@@ -717,19 +741,98 @@ def repo_root_of_path(path):
     return None
 
 
-def handle_user_prompt_submit(payload):
-    """Layer 2: detect cross-repo-strict investigation prompts and inject an
-    opt-out 'run rlm-fanout' directive. No state writes (MN-1) — heed-rate signal
-    is the fire log. Fail-open."""
-    session_id = payload.get("session_id")
-    prompt = payload.get("prompt") or ""
+def hygiene_scan(repo=None):
+    """Measure uncommitted work in `repo` (default: the harness dir).
+
+    Returns (count, oldest_age_days, samples) where `samples` is the oldest few
+    (path, age_days) pairs, or None when the scan cannot be trusted — not a git
+    repo, git missing, git failing, or git too slow. Fail-open by design: a
+    hygiene nudge is never worth delaying or breaking a prompt.
+
+    Age comes from mtime. For a directory entry that is the directory's own mtime
+    (which moves when entries are added or removed) rather than a walk of its
+    contents — the harness dir carries hundreds of MB of ignored transcripts and
+    walking it on a prompt would cost more than the nudge is worth.
+    """
+    repo = HARNESS_DIR if repo is None else Path(repo)
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True, text=True, timeout=HYGIENE_GIT_TIMEOUT,
+        )
+        if proc.returncode != 0:
+            return None
+    except Exception:
+        return None
+
+    now = time.time()
+    entries = []
+    for line in proc.stdout.splitlines():
+        path = line[3:].strip()
+        if not path:
+            continue
+        try:
+            mtime = (repo / path.rstrip("/")).stat().st_mtime
+            age = max(0, int((now - mtime) // 86400))
+        except OSError:
+            age = 0  # deleted file — no mtime; never let it dominate "oldest"
+        entries.append((path, age))
+
+    if not entries:
+        return (0, 0, [])
+    oldest = max(age for _, age in entries)
+    samples = sorted(entries, key=lambda e: -e[1])[:HYGIENE_SAMPLE_COUNT]
+    return (len(entries), oldest, samples)
+
+
+def hygiene_context(state):
+    """Advisory string when the harness repo's uncommitted pile is over a
+    threshold, else None.
+
+    Throttled by prompts_seen: fires on the first prompt of a session and every
+    HYGIENE_PROMPT_INTERVAL-th prompt after. Advisory only — blocking a prompt
+    over a dirty git tree would be absurd; the point is to surface finished work
+    that stranded, not to gate anything.
+    """
+    seen = state.get("prompts_seen", 0)
+    if seen < 1 or (seen - 1) % HYGIENE_PROMPT_INTERVAL != 0:
+        return None
+    scan = hygiene_scan()
+    if scan is None:
+        return None
+    count, oldest, samples = scan
+
+    reasons = []
+    if count > HYGIENE_MAX_FILES:
+        reasons.append(f"{count} uncommitted files (limit {HYGIENE_MAX_FILES})")
+    if oldest > HYGIENE_MAX_AGE_DAYS:
+        reasons.append(f"oldest dirty {oldest}d (limit {HYGIENE_MAX_AGE_DAYS}d)")
+    if not reasons:
+        return None
+
+    listed = ", ".join(f"{p} ({a}d)" for p, a in samples)
+    return (
+        f"**Harness hygiene** — `~/.claude` has {' and '.join(reasons)}. This repo is "
+        f"edited from many sessions and rarely exits cleanly, so finished work strands "
+        f"here. Commit what is done, grouped by concern, staging only related paths — "
+        f"never `git add -A`, since the pile may hold another session's work. "
+        f"Oldest: {listed}."
+    )
+
+
+def rlm_fanout_context(prompt):
+    """Layer 2: detect cross-repo-strict investigation prompts.
+
+    Returns (context_string, repos) or None. Extracted from the handler so
+    UserPromptSubmit can carry more than one advisory in a single payload.
+    """
     if not prompt.strip():
-        return
+        return None
     if not is_read_shaped(instruction_line(prompt)):
-        return  # write task → silent
+        return None  # write task → silent
     repos = sorted(match_repos(prompt, enumerate_repos()))
     if not (len(repos) >= 2 or has_cross_repo_phrase(prompt)):
-        return  # not cross-repo → silent
+        return None  # not cross-repo → silent
     if repos:
         ctx = (f"Cross-repo investigation detected (repos: {', '.join(repos)}). "
                f"Default to running the `rlm-fanout` workflow with `args.scopes` set to "
@@ -742,14 +845,51 @@ def handle_user_prompt_submit(payload):
                "boundary-free call-chain scout; wiki-gate first, ~150k cap). Open with "
                "'Running rlm-fanout — Esc to stop' and proceed unless the user objects. "
                "Do NOT hand-roll inline cross-repo reads.")
+    return ctx, repos
+
+
+def handle_user_prompt_submit(payload):
+    """UserPromptSubmit carries two independent advisories, merged into a single
+    additionalContext because the hook may only emit one JSON payload:
+
+      1. harness-hygiene pulse — throttled; fires on prompt 1 of a session and
+         every HYGIENE_PROMPT_INTERVAL-th after.
+      2. Layer 2 cross-repo rlm-fanout suggestion.
+
+    This handler now writes state (the hygiene pulse needs a prompt counter),
+    which the Layer-2 path previously did not. Fail-open throughout.
+    """
+    session_id = payload.get("session_id")
+    prompt = payload.get("prompt") or ""
+    parts = []
+
+    if session_id:
+        try:
+            state = load_state(session_id)
+            state["prompts_seen"] = state.get("prompts_seen", 0) + 1
+            save_state(state)
+            hyg = hygiene_context(state)
+            if hyg:
+                parts.append(hyg)
+                log_fire("harness_hygiene", session_id, "warn")
+        except Exception:
+            pass  # hygiene must never break the prompt
+
+    rlm = rlm_fanout_context(prompt)
+    if rlm:
+        ctx, repos = rlm
+        parts.append(ctx)
+        log_fire("workflow_suggest_rlm", session_id, "info", repos=repos)
+
+    if not parts:
+        return
     sys.stdout.write(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": ctx,
+            "additionalContext": "\n\n".join(parts),
         }
     }) + "\n")
     sys.stdout.flush()
-    log_fire("workflow_suggest_rlm", session_id, "info", repos=repos)
 
 
 def handle_pre_tool(payload):
