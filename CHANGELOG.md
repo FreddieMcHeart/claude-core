@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.4.0 (2026-07-15)
+
+### Bug Fixes
+
+- **hooks**: Drop the D-status shortcut that zeroed unmerged files
+  ([#11](https://github.com/FreddieMcHeart/claude-core/pull/11),
+  [`00c7b5e`](https://github.com/FreddieMcHeart/claude-core/commit/00c7b5ea3f12259133353f8f8de9ee6c3631e6a9))
+
+- **hooks**: Parse git status with -z -uall so the hygiene scan cannot under-report
+  ([#11](https://github.com/FreddieMcHeart/claude-core/pull/11),
+  [`00c7b5e`](https://github.com/FreddieMcHeart/claude-core/commit/00c7b5ea3f12259133353f8f8de9ee6c3631e6a9))
+
+### Features
+
+- **hooks**: Nudge when the harness repo has stale uncommitted work
+  ([#11](https://github.com/FreddieMcHeart/claude-core/pull/11),
+  [`00c7b5e`](https://github.com/FreddieMcHeart/claude-core/commit/00c7b5ea3f12259133353f8f8de9ee6c3631e6a9))
+
+
 ## v0.3.1 (2026-07-13)
 
 ### Bug Fixes
