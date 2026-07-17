@@ -27,9 +27,15 @@ def test_hooks_json_covers_all_five_events():
 def test_hooks_json_commands_and_matchers_match_legacy_table():
     data = json.loads((ROOT / "hooks" / "hooks.json").read_text())
     hooks = data["hooks"]
+    # As of 2026-07-17 the L4 context ledger (PostToolUse) must meter the dominant
+    # flood — Read/Bash/Grep AND MCP results — not only the Agent|Task|Workflow
+    # dispatch returns it was originally (mistakenly) scoped to. PostToolUse therefore
+    # adds `mcp__.*` on top of PreToolUse's enforcement list; PreToolUse stays as-is
+    # (its streak/edit-loop enforcement is intentionally tool-type specific).
+    pre_tools = "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|Agent|Task|Workflow"
     expected = {
-        "PreToolUse": ("Bash|Read|Grep|Glob|Edit|Write|MultiEdit|Agent|Task|Workflow", "pre-tool"),
-        "PostToolUse": ("Agent|Task|Workflow", "post-tool"),
+        "PreToolUse": (pre_tools, "pre-tool"),
+        "PostToolUse": (pre_tools + "|mcp__.*", "post-tool"),
         "SessionStart": ("startup|resume", "session-start"),
         "PostCompact": (None, "post-compact"),
         "UserPromptSubmit": (None, "user-prompt-submit"),

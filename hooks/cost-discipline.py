@@ -26,6 +26,14 @@ from pathlib import Path
 
 STATE_DIR = Path("/tmp")
 
+# ---- Cross-session cost ledger (2026-07-17) ----
+# Every session writes a compact, durable per-session cost summary here so the whole
+# session tree can be collected in one place (`cost-ledger/<session_id>.json`). This is
+# separate from the /tmp working state (which auto-cleans on reboot): the cost ledger is
+# the persistent, collectable record. It is machine-local runtime state, NOT part of the
+# repo. Writing it is best-effort and must never block or fail a tool call.
+COST_LEDGER_DIR = Path.home() / ".claude" / "cost-ledger"
+
 # ---- Harness hygiene (2026-07-15) ----
 # The harness repo (~/.claude) is edited from many concurrent sessions, and sessions
 # rarely end cleanly — they are left open or killed — so any "commit on exit" nudge
@@ -345,6 +353,9 @@ def new_state(session_id):
         "rlm_active": False,     # Layer 3 suppressor: a Workflow dispatch happened (NEW-2)
         "compactions_seen": 0,   # PostCompact: count compactions to nudge toward /handoff
         "tool_result_chars": 0,  # L4: cumulative tool result chars accumulated in context
+        "tool_result_chars_by_tool": {},  # cost-ledger: per-tool char breakdown (which tool floods)
+        "cwd": None,             # cost-ledger: working dir, captured at session start
+        "started_at": None,      # cost-ledger: ISO8601, captured at session start
         "reader_violations": {},  # I4: per-family inline-read violation count (post-first-fire)
         "read_streak": 0,         # consecutive read-only tool calls (hard-block tier, 2026-06-27)
         "last_router_call": -999, # tool_calls_total index when models-router Skill last ran
@@ -390,6 +401,57 @@ def save_state(state):
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(state, indent=2))
     tmp.replace(p)
+
+
+# Cost estimate calibration (matches the L4 context-ledger message):
+# ~3.5 chars/token, ~$22.5 per 1M cache-read tokens re-paid each turn.
+LEDGER_CHARS_PER_TOKEN = 3.5
+LEDGER_USD_PER_MTOK = 22.5
+
+
+def cost_ledger_path(session_id):
+    return COST_LEDGER_DIR / f"{session_id}.json"
+
+
+def build_cost_ledger(state):
+    """Derive the compact, collectable per-session cost summary from working state.
+    Pure function (no I/O) so it is trivially testable."""
+    chars = state.get("tool_result_chars", 0)
+    tokens = int(chars / LEDGER_CHARS_PER_TOKEN)
+    by_tool_chars = state.get("tool_result_chars_by_tool", {}) or {}
+    by_tool = {
+        name: {"chars": c, "tokens": int(c / LEDGER_CHARS_PER_TOKEN)}
+        for name, c in sorted(by_tool_chars.items(), key=lambda kv: kv[1], reverse=True)
+    }
+    return {
+        "session_id": state.get("session_id"),
+        "cwd": state.get("cwd"),
+        "started_at": state.get("started_at"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "main_model": get_main_model_name(),
+        "tool_calls_total": state.get("tool_calls_total", 0),
+        "tool_result_chars": chars,
+        "tool_result_tokens_est": tokens,
+        "cache_reread_usd_per_turn_est": round(tokens * LEDGER_USD_PER_MTOK / 1e6, 2),
+        "aggregate_reads": state.get("aggregate_reads", 0),
+        "tool_result_chars_by_tool": by_tool,
+    }
+
+
+def write_cost_ledger(state):
+    """Best-effort: persist the per-session cost summary to the cross-session ledger dir.
+    Never raises — a ledger write must not block or fail a tool call."""
+    try:
+        session_id = state.get("session_id")
+        if not session_id:
+            return
+        COST_LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+        p = cost_ledger_path(session_id)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(build_cost_ledger(state), indent=2))
+        tmp.replace(p)
+    except Exception:
+        pass
 
 
 def emit(msg):
@@ -1437,6 +1499,8 @@ def handle_post_tool(payload):
 
     state = load_state(session_id)
     state["tool_result_chars"] = state.get("tool_result_chars", 0) + size
+    by_tool = state.setdefault("tool_result_chars_by_tool", {})
+    by_tool[tool_name] = by_tool.get(tool_name, 0) + size
 
     # Per-result tripwire: single oversized result (fire_once per session)
     if size > 10_000 and "tool_result_oversize" not in state["warnings_fired"]:
@@ -1499,6 +1563,7 @@ def handle_post_tool(payload):
         # reset aggregate/streak counters exactly like an Agent/Task dispatch
     elif tool_name not in DISPATCH_TOOLS:
         save_state(state)
+        write_cost_ledger(state)
         return
 
     state["aggregate_reads"] = 0
@@ -1509,6 +1574,7 @@ def handle_post_tool(payload):
         if key in state["warnings_fired"]:
             state["warnings_fired"].remove(key)
     save_state(state)
+    write_cost_ledger(state)
 
 
 def handle_session_start(payload):
@@ -1529,8 +1595,17 @@ def handle_session_start(payload):
         # Pre-populate agent_models cache so the first dispatch is fast.
         state = new_state(session_id)
         state["agent_models"] = scan_agent_models()
+        state["cwd"] = payload.get("cwd") or os.getcwd()
+        state["started_at"] = datetime.now(timezone.utc).isoformat()
         save_state(state)
+    # Emit the critical rules banner FIRST; the cost-ledger seed is best-effort and
+    # must never be sequenced ahead of session-start context (a future un-guarded
+    # failure there could otherwise preempt the banner).
     emit_session_context(FORCE_LOAD_RULES)
+    # Seed the cross-session cost ledger LAST so a session that does no tool calls
+    # still appears in the collection (with zeroed counters).
+    if session_id:
+        write_cost_ledger(load_state(session_id))
 
 
 def handle_post_compact(payload):
