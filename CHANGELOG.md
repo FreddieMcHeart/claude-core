@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.5.0 (2026-07-18)
+
+### Features
+
+- **cost-discipline**: Meter all tool results + cross-session cost ledger
+  ([#12](https://github.com/FreddieMcHeart/claude-core/pull/12),
+  [`2a7c4e5`](https://github.com/FreddieMcHeart/claude-core/commit/2a7c4e5573b604fe7bbd89748cba368e16065b97))
+
+
 ## v0.4.0 (2026-07-15)
 
 ### Bug Fixes
