@@ -353,6 +353,10 @@ def new_state(session_id):
         "rlm_active": False,     # Layer 3 suppressor: a Workflow dispatch happened (NEW-2)
         "compactions_seen": 0,   # PostCompact: count compactions to nudge toward /handoff
         "tool_result_chars": 0,  # L4: cumulative tool result chars accumulated in context
+        "metered_results": 0,    # cost-ledger: count of results whose chars we summed (the
+                                 # denominator that matches tool_result_chars; unlike
+                                 # tool_calls_total it also counts mcp__ tools, which
+                                 # PostToolUse meters but PreToolUse does not increment)
         "tool_result_chars_by_tool": {},  # cost-ledger: per-tool char breakdown (which tool floods)
         "cwd": None,             # cost-ledger: working dir, captured at session start
         "started_at": None,      # cost-ledger: ISO8601, captured at session start
@@ -429,7 +433,8 @@ def build_cost_ledger(state):
         "started_at": state.get("started_at"),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "main_model": get_main_model_name(),
-        "tool_calls_total": state.get("tool_calls_total", 0),
+        "tool_calls_total": state.get("tool_calls_total", 0),  # PreToolUse count (excludes mcp__)
+        "metered_results": state.get("metered_results", 0),    # matches tool_result_chars
         "tool_result_chars": chars,
         "tool_result_tokens_est": tokens,
         "cache_reread_usd_per_turn_est": round(tokens * LEDGER_USD_PER_MTOK / 1e6, 2),
@@ -1499,8 +1504,13 @@ def handle_post_tool(payload):
 
     state = load_state(session_id)
     state["tool_result_chars"] = state.get("tool_result_chars", 0) + size
-    by_tool = state.setdefault("tool_result_chars_by_tool", {})
-    by_tool[tool_name] = by_tool.get(tool_name, 0) + size
+    # metered_results is the denominator that actually matches tool_result_chars: it
+    # counts every result we summed, including mcp__ tools (PostToolUse meters them but
+    # PreToolUse never increments tool_calls_total for them).
+    state["metered_results"] = state.get("metered_results", 0) + 1
+    if tool_name:  # skip a nameless bucket if tool_name is ever missing
+        by_tool = state.setdefault("tool_result_chars_by_tool", {})
+        by_tool[tool_name] = by_tool.get(tool_name, 0) + size
 
     # Per-result tripwire: single oversized result (fire_once per session)
     if size > 10_000 and "tool_result_oversize" not in state["warnings_fired"]:

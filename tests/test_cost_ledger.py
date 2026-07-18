@@ -116,8 +116,23 @@ def test_post_tool_meters_mcp_result(tmp_path, monkeypatch):
     # MCP results are metered too (previously invisible to the ledger)
     assert state["tool_result_chars"] >= 6000
     assert state["tool_result_chars_by_tool"]["mcp__claude_ai_Atlassian__getJiraIssue"] >= 6000
+    # metered_results is the consistent denominator: it counts the MCP result even though
+    # tool_calls_total (a PreToolUse-only counter that never matches mcp__) stays 0.
+    assert state["metered_results"] == 1
+    assert state["tool_calls_total"] == 0
     led = json.loads((cd.COST_LEDGER_DIR / "smcp.json").read_text())
     assert led["tool_result_chars"] >= 6000
+    assert led["metered_results"] == 1
+
+
+def test_post_tool_skips_empty_tool_name_bucket(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    # a payload with no tool_name still meters total chars but must not create a "" bucket
+    cd.handle_post_tool({"session_id": "sblank", "tool_response": "z" * 100})
+    state = cd.load_state("sblank")
+    assert state["tool_result_chars"] >= 100
+    assert state["metered_results"] == 1
+    assert "" not in state["tool_result_chars_by_tool"]
 
 
 def test_hooks_json_posttooluse_covers_read_bash_grep_and_mcp():
