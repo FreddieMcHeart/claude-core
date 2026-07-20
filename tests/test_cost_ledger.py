@@ -135,6 +135,44 @@ def test_post_tool_skips_empty_tool_name_bucket(tmp_path, monkeypatch):
     assert "" not in state["tool_result_chars_by_tool"]
 
 
+# ---------------- compaction resets the ledger window consistently ----------------
+
+def test_post_compact_resets_ledger_window_and_keeps_denominator_matching(tmp_path, monkeypatch):
+    """tool_result_chars models in-context drag and resets to 0 on compaction. The
+    per-tool breakdown and the metered_results denominator describe the SAME window, so
+    they must reset with it — otherwise by_tool becomes a lifetime accumulator next to a
+    since-compact headline (never reconciles) and metered_results stops matching its
+    numerator (avg-chars-per-result goes meaningless). This pins all three to one window.
+    """
+    _isolate(monkeypatch, tmp_path)
+    sid = "scompact"
+    # prime: two metered results across two tools; headline == sum(by_tool); denom == 2
+    cd.handle_post_tool({"session_id": sid, "tool_name": "Read", "tool_response": "r" * 4000})
+    cd.handle_post_tool({"session_id": sid, "tool_name": "Bash", "tool_response": "b" * 2000})
+    primed = cd.load_state(sid)
+    primed["tool_calls_total"] = 7  # PreToolUse lifetime counter; must survive compaction
+    cd.save_state(primed)
+    assert primed["metered_results"] == 2
+    assert sum(primed["tool_result_chars_by_tool"].values()) == primed["tool_result_chars"] >= 6000
+
+    # compaction flushes context: all three window fields reset together...
+    cd.handle_post_compact({"session_id": sid})
+    post = cd.load_state(sid)
+    assert post["tool_result_chars"] == 0
+    assert post["metered_results"] == 0
+    assert post["tool_result_chars_by_tool"] == {}
+    # ...while lifetime counters are preserved / advanced
+    assert post["tool_calls_total"] == 7
+    assert post["compactions_seen"] == 1
+
+    # one result after compaction: the denominator still matches its numerator and the
+    # per-tool breakdown reconciles with the headline (the invariant that broke pre-fix).
+    cd.handle_post_tool({"session_id": sid, "tool_name": "Read", "tool_response": "r" * 5000})
+    final = cd.load_state(sid)
+    assert final["metered_results"] == 1
+    assert sum(final["tool_result_chars_by_tool"].values()) == final["tool_result_chars"] >= 5000
+
+
 def test_hooks_json_posttooluse_covers_read_bash_grep_and_mcp():
     path = Path(cd.__file__).resolve().parent / "hooks.json"
     matcher = json.loads(path.read_text())["hooks"]["PostToolUse"][0]["matcher"]
