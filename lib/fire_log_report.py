@@ -3,7 +3,8 @@
 
 The cost-discipline hook appends one JSON line per fired nudge to
 ``~/.claude/state/cost-discipline-log.jsonl`` (see ``hooks/cost-discipline.py``,
-``log_fire``). Each entry is ``{ts, rule, action, session_id, file_path}``.
+``log_fire``). Each entry has ``{ts, rule, action, session_id}`` plus rule-specific
+extras (``file_path`` on the edit-loop rules, and others this report does not read).
 
 Where the cost-ledger report (``cost_ledger_report.py``) answers "what floods
 context", this answers the other half: "where is the methodology actually being
@@ -51,7 +52,10 @@ def load_fires(log_path):
 # ---------------------------------------------------------------- helpers
 
 def _date(entry):
-    return (entry.get("ts") or "")[:10]
+    # type-safe: a hand-edited / partially-written line could carry a non-string
+    # ts (e.g. an epoch int); slicing that would raise and abort the whole report.
+    ts = entry.get("ts")
+    return ts[:10] if isinstance(ts, str) else ""
 
 
 def _table(headers, rows, aligns=None):
@@ -93,8 +97,10 @@ def totals(fires):
     return {
         "fires": len(fires),
         "window": [min(dates), max(dates)] if dates else ["-", "-"],
-        "sessions": len({x.get("session_id") for x in fires if x.get("session_id")}),
-        "rules": len({x.get("rule") for x in fires if x.get("rule")}),
+        # count "?" the same way by_session/by_rule bucket a missing value, so the
+        # headline counts always match the rows rendered in the tables below.
+        "sessions": len({x.get("session_id") or "?" for x in fires}),
+        "rules": len({x.get("rule") or "?" for x in fires}),
         "actions": dict(Counter(x.get("action") or "?" for x in fires)),
     }
 
@@ -107,7 +113,7 @@ def by_rule(fires):
         bucket = acc.setdefault(rule, {"total": 0, "warn": 0, "info": 0, "block": 0})
         bucket["total"] += 1
         action = x.get("action") or "?"
-        if action in bucket:
+        if action in ("warn", "info", "block"):  # fixed set, not the bucket dict
             bucket[action] += 1
     return dict(sorted(acc.items(), key=lambda kv: kv[1]["total"], reverse=True))
 
@@ -149,11 +155,12 @@ def format_report(all_fires, top=15, since=None, rule=None):
         parts.append("")
         parts.append("BY RULE (most-fired first — where discipline is worked past)")
         br_rows = [
-            [r, str(v["total"]), str(v["warn"]), str(v["block"])]
+            [r, str(v["total"]), str(v["warn"]), str(v["info"]), str(v["block"])]
             for r, v in _cap(list(by_rule(fires).items()), top)
         ]
         parts.append(
-            _table(["RULE", "FIRES", "WARN", "BLOCK"], br_rows, ["<", ">", ">", ">"])
+            _table(["RULE", "FIRES", "WARN", "INFO", "BLOCK"], br_rows,
+                   ["<", ">", ">", ">", ">"])
             if br_rows else "  (none)"
         )
 

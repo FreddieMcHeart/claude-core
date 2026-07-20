@@ -133,6 +133,47 @@ def test_table_normalizes_mismatched_row_length():
     assert "4" not in out  # long row truncated to header count, header preserved
 
 
+# ---------------- robustness / consistency (review-driven) ----------------
+
+def test_by_rule_ignores_unknown_and_total_string_actions():
+    fires = [
+        {"ts": "2026-07-19T12:00:00+00:00", "rule": "r", "action": "total", "session_id": "s"},
+        {"ts": "2026-07-19T12:00:00+00:00", "rule": "r", "action": "weird", "session_id": "s"},
+        _fire("s", "2026-07-19", "r", "info"),
+    ]
+    br = rpt.by_rule(fires)
+    assert br["r"]["total"] == 3   # every entry counted once — action "total" must not double-count
+    assert br["r"]["info"] == 1
+    assert br["r"]["warn"] == 0 and br["r"]["block"] == 0
+
+
+def test_report_survives_nonstring_ts():
+    # a partially-written / hand-edited line with an epoch-int ts must not crash the report
+    bad = {"ts": 1753000000, "rule": "r", "action": "warn", "session_id": "s"}
+    assert rpt._date(bad) == ""
+    assert rpt.totals([bad])["fires"] == 1                     # no TypeError in totals
+    assert "COST-DISCIPLINE FIRE-LOG" in rpt.format_report([bad])
+    assert rpt.filter_fires([bad], since="2026-01-01") == []   # undateable row drops from --since
+
+
+def test_totals_counts_match_table_rows_with_missing_fields():
+    fires = [
+        _fire("s1", "2026-07-19", "r1"),
+        {"ts": "2026-07-19T12:00:00+00:00", "action": "warn"},  # no rule, no session_id
+    ]
+    t = rpt.totals(fires)
+    assert t["rules"] == len(rpt.by_rule(fires))        # both count the "?" bucket -> 2
+    assert t["sessions"] == len(rpt.by_session(fires))  # -> 2
+
+
+def test_format_report_shows_info_column():
+    fires = [_fire("s", "2026-07-19", "workflow_suggest_rlm", "info") for _ in range(3)]
+    out = rpt.format_report(fires)
+    assert "INFO" in out  # info-only rules are not invisible in the BY RULE table
+    row = next(ln for ln in out.splitlines() if ln.startswith("workflow_suggest_rlm"))
+    assert "3" in row  # FIRES and INFO both surfaced in the rule's row
+
+
 # ---------------- cli ----------------
 
 def test_main_missing_file_returns_1(tmp_path, capsys):
