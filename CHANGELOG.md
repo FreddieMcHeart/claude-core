@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.6.0 (2026-07-20)
+
+### Features
+
+- **cost-ledger**: Cross-session ledger summary report
+  ([`e687cde`](https://github.com/FreddieMcHeart/claude-core/commit/e687cde9d0289912043b6311f59975ddf6795476))
+
+
 ## v0.5.1 (2026-07-20)
 
 ### Bug Fixes
