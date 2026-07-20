@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.8.1 (2026-07-20)
+
+### Bug Fixes
+
+- **cost-ledger**: Correct aggregate_reads window label (not lifetime)
+  ([`f25cf35`](https://github.com/FreddieMcHeart/claude-core/commit/f25cf35f560436d210e180bcbde6e410b71bc0e6))
+
+
 ## v0.8.0 (2026-07-20)
 
 ### Features
