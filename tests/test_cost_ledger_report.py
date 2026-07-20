@@ -148,6 +148,57 @@ def test_build_json_shape():
     assert j["totals"]["sessions"] == 1
 
 
+# ---------------- robustness: malformed fields don't crash the whole report ----------------
+
+def test_report_survives_null_numeric_field(tmp_path, capsys):
+    # one interrupted-mid-write ledger with null fields, next to a good one
+    good = _led("good", "2026-07-19")
+    bad = _led("bad", "2026-07-19")
+    bad["tool_calls_total"] = None
+    bad["cache_reread_usd_per_turn_est"] = None
+    bad["cwd"] = None  # a real ledger can carry cwd:null (session cwd not captured)
+    _write(tmp_path, good)
+    _write(tmp_path, bad)
+    ledgers = rpt.load_ledgers(tmp_path)
+    # aggregation treats the bad field as 0 rather than raising TypeError
+    assert rpt.totals(ledgers)["tool_calls_total"] == good["tool_calls_total"]
+    # and the CLI renders both sessions without an unhandled traceback
+    assert rpt.main(["--dir", str(tmp_path)]) == 0
+    assert "COST LEDGER" in capsys.readouterr().out
+
+
+def test_by_tool_rollup_coerces_nonnumeric_values():
+    ledgers = [
+        _led("a", "2026-07-19", by_tool={"Read": "500", "Bash": {"chars": None, "tokens": 10}}),
+        _led("b", "2026-07-19", by_tool={"Read": {"chars": 100, "tokens": 30}}),
+    ]
+    roll = rpt.by_tool_rollup(ledgers)  # must not raise
+    assert roll["Read"]["chars"] == 100  # the bare string "500" coerces to 0
+    assert roll["Bash"]["chars"] == 0    # null chars coerces to 0
+    assert roll["Bash"]["tokens"] == 10
+
+
+def test_format_report_tolerates_nonnumeric_dollar_field():
+    bad = _led("bad", "2026-07-19")
+    bad["cache_reread_usd_per_turn_est"] = "n/a"
+    out = rpt.format_report([bad])  # the $/TURN :.2f format must not raise
+    assert "0.00" in out
+
+
+def test_table_normalizes_mismatched_row_length():
+    out = rpt._table(["A", "B", "C"], [["1", "2"], ["1", "2", "3", "4"]])
+    lines = out.splitlines()
+    assert lines[0].split() == ["A", "B", "C"]  # all headers survive a short row
+    assert "4" not in out  # long row truncated to header count, not spilled
+
+
+def test_format_report_labels_lifetime_vs_since_compaction():
+    out = rpt.format_report([_led("a", "2026-07-19")])
+    assert "(lifetime)" in out
+    assert "since last compaction" in out
+    assert "CALLS/AGGR = lifetime" in out
+
+
 # ---------------- cli ----------------
 
 def test_main_missing_dir_returns_1(tmp_path, capsys):

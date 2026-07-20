@@ -14,9 +14,12 @@ when a session needs drilling into.
 Zero-activity sessions (seeded at SessionStart but with no metered results) are
 hidden by default; pass ``--all`` to include them.
 
-Usage::
-
-    python lib/cost_ledger_report.py [--top N] [--all] [--since YYYY-MM-DD] [--json]
+Metric windows differ, and the report labels which is which: ``tool calls`` and
+``aggregate reads`` count across the session's whole lifetime, while ``metered
+results``, ``result volume``, the by-tool rollup, and ``$/turn`` reset on every
+compaction (they track the drag currently in context — what the cache-reread
+cost is a function of). So a compacted session's low volume next to a high call
+count is expected, not a bug, and must not be read as a lifetime total.
 """
 from __future__ import annotations
 
@@ -45,6 +48,20 @@ def load_ledgers(ledger_dir):
 
 # ---------------------------------------------------------------- helpers
 
+def _num(value):
+    """Coerce a ledger field to a number for arithmetic/formatting.
+
+    A partially-written ledger (the hook interrupted mid-write, or a field added
+    in a newer schema and absent/null in an old file) can carry ``null`` or a
+    wrong-typed value. ``dict.get(key, 0)`` returns the *present* ``None``, not
+    the default, so summing/formatting it raises and takes down the whole report
+    for every session. Treating non-numbers as 0 keeps one bad file from doing
+    that. ``bool`` is excluded — it is an ``int`` subclass but would silently
+    corrupt sums.
+    """
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
 def _date(led):
     return (led.get("updated_at") or led.get("started_at") or "")[:10]
 
@@ -57,11 +74,11 @@ def is_zero_session(led):
 def _tool_chars(value):
     """by_tool values are ``{chars, tokens}`` in a written ledger, but tolerate a
     bare int in case a raw state dict is passed in."""
-    return value.get("chars", 0) if isinstance(value, dict) else (value or 0)
+    return _num(value.get("chars")) if isinstance(value, dict) else _num(value)
 
 
 def _tool_tokens(value):
-    return value.get("tokens", 0) if isinstance(value, dict) else 0
+    return _num(value.get("tokens")) if isinstance(value, dict) else 0
 
 
 def _top_tool(led):
@@ -101,11 +118,11 @@ def totals(ledgers):
     return {
         "sessions": len(ledgers),
         "window": [min(dates), max(dates)] if dates else ["-", "-"],
-        "tool_calls_total": sum(x.get("tool_calls_total", 0) for x in ledgers),
-        "metered_results": sum(x.get("metered_results", 0) for x in ledgers),
-        "result_chars": sum(x.get("tool_result_chars", 0) for x in ledgers),
-        "result_tokens_est": sum(x.get("tool_result_tokens_est", 0) for x in ledgers),
-        "aggregate_reads": sum(x.get("aggregate_reads", 0) for x in ledgers),
+        "tool_calls_total": sum(_num(x.get("tool_calls_total")) for x in ledgers),
+        "metered_results": sum(_num(x.get("metered_results")) for x in ledgers),
+        "result_chars": sum(_num(x.get("tool_result_chars")) for x in ledgers),
+        "result_tokens_est": sum(_num(x.get("tool_result_tokens_est")) for x in ledgers),
+        "aggregate_reads": sum(_num(x.get("aggregate_reads")) for x in ledgers),
         "models": models,
     }
 
@@ -123,23 +140,31 @@ def by_tool_rollup(ledgers):
 
 def per_session_rows(ledgers, top=15):
     """Ledgers sorted by est result-tokens descending; ``top<=0`` returns all."""
-    ranked = sorted(ledgers, key=lambda x: x.get("tool_result_tokens_est", 0), reverse=True)
+    ranked = sorted(ledgers, key=lambda x: _num(x.get("tool_result_tokens_est")), reverse=True)
     return ranked[:top] if top and top > 0 else ranked
 
 
 # ---------------------------------------------------------------- formatting
 
 def _table(headers, rows, aligns=None):
-    """Render a fixed-width text table. aligns: list of '<'/'>' per column."""
-    cols = list(zip(*([headers] + rows))) if rows else [[h] for h in headers]
-    widths = [max(len(str(c)) for c in col) for col in cols]
-    aligns = aligns or ["<"] * len(headers)
+    """Render a fixed-width text table. aligns: list of '<'/'>' per column.
+
+    Rows are normalised to the header count (short rows padded, long rows
+    truncated) so a mismatched row can never silently drop a header column via
+    ``zip``'s shortest-tuple behaviour."""
+    n = len(headers)
+    norm = [list(r)[:n] + [""] * (n - len(r)) for r in rows]
+    aligns = aligns or ["<"] * n
+    widths = [
+        max([len(str(headers[i]))] + [len(str(r[i])) for r in norm])
+        for i in range(n)
+    ]
 
     def render(cells):
         return "  ".join(f"{str(c):{a}{w}}" for c, w, a in zip(cells, widths, aligns))
 
     out = [render(headers), render(["-" * w for w in widths])]
-    out.extend(render(r) for r in rows)
+    out.extend(render(r) for r in norm)
     return "\n".join(out)
 
 
@@ -159,17 +184,17 @@ def format_report(all_ledgers, top=15, show_all=False, since=None):
         + (f"  (+{hidden} zero-activity hidden; --all to show)" if hidden else "")
     )
     parts.append(f"window          : {t['window'][0]} .. {t['window'][1]}")
-    parts.append(f"tool calls      : {t['tool_calls_total']}")
-    parts.append(f"metered results : {t['metered_results']}")
+    parts.append(f"tool calls      : {t['tool_calls_total']}  (lifetime)")
+    parts.append(f"aggregate reads : {t['aggregate_reads']}  (lifetime)")
+    parts.append(f"metered results : {t['metered_results']}  (since last compaction)")
     parts.append(
         f"result volume   : {t['result_chars']:,} chars"
-        f"  (~{t['result_tokens_est'] // 1000}k tokens est)"
+        f"  (~{t['result_tokens_est'] // 1000}k tokens est, since last compaction)"
     )
-    parts.append(f"aggregate reads : {t['aggregate_reads']}")
     parts.append(f"main models     : {models}")
 
     parts.append("")
-    parts.append("BY TOOL (metered result volume)")
+    parts.append("BY TOOL (result volume, since last compaction)")
     bt = by_tool_rollup(shown)
     bt_rows = [
         [tool, f"{v['chars']:,}", f"{v['tokens'] // 1000}k"]
@@ -187,12 +212,12 @@ def format_report(all_ledgers, top=15, show_all=False, since=None):
         [
             _date(x) or "-",
             (x.get("main_model") or "?"),
-            str(x.get("tool_calls_total", 0)),
-            str(x.get("metered_results", 0)),
-            f"{x.get('tool_result_tokens_est', 0) // 1000}k",
-            str(x.get("aggregate_reads", 0)),
-            f"{x.get('cache_reread_usd_per_turn_est', 0):.2f}",
-            (Path(x.get("cwd", "")).name or "?")[:14],
+            str(_num(x.get("tool_calls_total"))),
+            str(_num(x.get("metered_results"))),
+            f"{_num(x.get('tool_result_tokens_est')) // 1000}k",
+            str(_num(x.get("aggregate_reads"))),
+            f"{_num(x.get('cache_reread_usd_per_turn_est')):.2f}",
+            (Path(x.get("cwd") or "").name or "?")[:14],
             _short_tool(_top_tool(x))[:22],
         ]
         for x in per_session_rows(shown, top=top)
@@ -200,6 +225,8 @@ def format_report(all_ledgers, top=15, show_all=False, since=None):
     headers = ["DATE", "MODEL", "CALLS", "METRD", "~KTOK", "AGGR", "$/TURN", "CWD", "TOP-TOOL"]
     aligns = ["<", "<", ">", ">", ">", ">", ">", "<", "<"]
     parts.append(_table(headers, ps_rows, aligns) if ps_rows else "  (no active sessions)")
+    if ps_rows:
+        parts.append("  CALLS/AGGR = lifetime; METRD/~KTOK/$TURN = since last compaction.")
 
     return "\n".join(parts)
 
