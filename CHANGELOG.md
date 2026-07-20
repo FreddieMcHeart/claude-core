@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.8.0 (2026-07-20)
+
+### Features
+
+- **metrics**: Capture/compare cohort snapshots of session cost metrics
+  ([`eb81d5a`](https://github.com/FreddieMcHeart/claude-core/commit/eb81d5a7a4f4b9248c745c087796c84ccaeabd46))
+
+### Refactoring
+
+- **reports**: Extract shared _report_table helper
+  ([`cc82b1f`](https://github.com/FreddieMcHeart/claude-core/commit/cc82b1fa1e0a40e8eddf31904e8b2d7f47041e4e))
+
+
 ## v0.7.0 (2026-07-20)
 
 ### Features
