@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.7.0 (2026-07-20)
+
+### Features
+
+- **fire-log**: Cost-discipline fire-log summary report
+  ([`1d67c25`](https://github.com/FreddieMcHeart/claude-core/commit/1d67c25e11bf560599522ede9b0653c1b59b211f))
+
+
 ## v0.6.0 (2026-07-20)
 
 ### Features
