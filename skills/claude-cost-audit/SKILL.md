@@ -10,6 +10,20 @@ scope: core
 
 Trigger words: "audit my claude cost", "how much am I spending", "check session costs", "analyze session usage", "cost audit", "claude spend".
 
+## Fast path: cross-session ledger report (no model call)
+
+Before dispatching the JSONL audit below, run the pre-aggregated **cost-ledger report** for an instant cross-session overview. The cost-discipline hook writes one summary per session to `~/.claude/cost-ledger/<session_id>.json`; this reads them directly — no JSONL parsing, no Haiku worker:
+
+```bash
+python lib/cost_ledger_report.py            # totals + by-tool rollup + top-15 sessions
+python lib/cost_ledger_report.py --top 0    # every active session
+python lib/cost_ledger_report.py --all      # include zero-activity (SessionStart-seeded) sessions
+python lib/cost_ledger_report.py --since 2026-07-14
+python lib/cost_ledger_report.py --json     # machine-readable {totals, by_tool, sessions}
+```
+
+Use this to find *which* sessions are worth drilling into (highest est result-tokens / $/turn), then run the full JSONL audit below only on those. Note the ledger measures **in-context result volume** (the cache-reread driver, reset per compaction), not billed API cost — the JSONL audit remains the source of truth for actual token spend.
+
 ## Workflow
 
 1. **Identify target sessions.** Unless the user gives a date range, default to "today + last full working day". Session JSONL files live in `~/.claude/projects/<project-slug>/*.jsonl`. Sort by mtime; pick all files modified within the range.
