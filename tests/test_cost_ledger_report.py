@@ -196,9 +196,12 @@ def test_table_normalizes_mismatched_row_length():
 
 def test_format_report_labels_lifetime_vs_since_compaction():
     out = rpt.format_report([_led("a", "2026-07-19")])
-    assert "(lifetime)" in out
+    assert "(lifetime)" in out  # tool calls
     assert "since last compaction" in out
-    assert "CALLS/AGGR = lifetime" in out
+    # aggregate reads is NOT lifetime — the hook resets it on dispatch/compaction
+    assert "CALLS/AGGR = lifetime" not in out
+    aggr_line = next(ln for ln in out.splitlines() if ln.startswith("aggregate reads"))
+    assert "lifetime" not in aggr_line and "dispatch/compaction" in aggr_line
 
 
 # ---------------- cli ----------------
