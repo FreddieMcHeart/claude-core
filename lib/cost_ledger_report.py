@@ -14,12 +14,13 @@ when a session needs drilling into.
 Zero-activity sessions (seeded at SessionStart but with no metered results) are
 hidden by default; pass ``--all`` to include them.
 
-Metric windows differ, and the report labels which is which: ``tool calls`` and
-``aggregate reads`` count across the session's whole lifetime, while ``metered
-results``, ``result volume``, the by-tool rollup, and ``$/turn`` reset on every
-compaction (they track the drag currently in context — what the cache-reread
-cost is a function of). So a compacted session's low volume next to a high call
-count is expected, not a bug, and must not be read as a lifetime total.
+Metric windows differ, and the report labels which is which: only ``tool calls``
+counts across the session's whole lifetime, while ``metered results``, ``result
+volume``, the by-tool rollup, and ``$/turn`` reset on every compaction (they
+track the drag currently in context — what the cache-reread cost is a function
+of), and ``aggregate reads`` is a rolling counter reset on every dispatch AND
+compaction. So a compacted session's low volume next to a high call count is
+expected, not a bug, and must not be read as a lifetime total.
 """
 from __future__ import annotations
 
@@ -165,12 +166,12 @@ def format_report(all_ledgers, top=15, show_all=False, since=None):
     )
     parts.append(f"window          : {t['window'][0]} .. {t['window'][1]}")
     parts.append(f"tool calls      : {t['tool_calls_total']}  (lifetime)")
-    parts.append(f"aggregate reads : {t['aggregate_reads']}  (lifetime)")
     parts.append(f"metered results : {t['metered_results']}  (since last compaction)")
     parts.append(
         f"result volume   : {t['result_chars']:,} chars"
         f"  (~{t['result_tokens_est'] // 1000}k tokens est, since last compaction)"
     )
+    parts.append(f"aggregate reads : {t['aggregate_reads']}  (resets on dispatch/compaction)")
     parts.append(f"main models     : {models}")
 
     parts.append("")
@@ -206,7 +207,7 @@ def format_report(all_ledgers, top=15, show_all=False, since=None):
     aligns = ["<", "<", ">", ">", ">", ">", ">", "<", "<"]
     parts.append(_table(headers, ps_rows, aligns) if ps_rows else "  (no active sessions)")
     if ps_rows:
-        parts.append("  CALLS/AGGR = lifetime; METRD/~KTOK/$TURN = since last compaction.")
+        parts.append("  CALLS = lifetime; AGGR = rolling; METRD/~KTOK/$TURN = since compaction.")
 
     return "\n".join(parts)
 
