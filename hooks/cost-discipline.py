@@ -1643,6 +1643,15 @@ def handle_post_compact(payload):
     state["repo_roots_seen"] = []
     state["rlm_active"] = False
     state["tool_result_chars"] = 0  # L4: compaction clears context; drag restarts from zero
+    # Reset the by-tool breakdown and the metered_results denominator together with
+    # tool_result_chars: all three describe the SAME window (in-context drag since the
+    # last compaction), which is what the cache-reread estimate is derived from. Left
+    # un-reset, by_tool became a lifetime accumulator sitting next to a since-compact
+    # headline (they never reconcile), and metered_results — documented as "the
+    # denominator that matches tool_result_chars" — silently stopped matching its
+    # numerator after the first compaction, making avg-chars-per-result meaningless.
+    state["tool_result_chars_by_tool"] = {}
+    state["metered_results"] = 0
     # compactions_seen is NOT reset — it counts across the session's lifetime to
     # detect repeated auto-compaction (the signal to switch to a lossless /handoff).
     state["compactions_seen"] = state.get("compactions_seen", 0) + 1
