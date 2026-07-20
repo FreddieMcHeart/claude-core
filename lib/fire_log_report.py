@@ -24,6 +24,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from _report_table import table as _table
+
 DEFAULT_LOG = Path.home() / ".claude" / "state" / "cost-discipline-log.jsonl"
 
 
@@ -56,27 +58,6 @@ def _date(entry):
     # ts (e.g. an epoch int); slicing that would raise and abort the whole report.
     ts = entry.get("ts")
     return ts[:10] if isinstance(ts, str) else ""
-
-
-def _table(headers, rows, aligns=None):
-    """Fixed-width text table. Mirrors the hardened ``cost_ledger_report._table``
-    (kept as a self-contained copy so this CLI runs standalone): rows are
-    normalised to the header count so a mismatched row can never silently drop a
-    header column via ``zip``'s shortest-tuple behaviour."""
-    n = len(headers)
-    norm = [list(r)[:n] + [""] * (n - len(r)) for r in rows]
-    aligns = aligns or ["<"] * n
-    widths = [
-        max([len(str(headers[i]))] + [len(str(r[i])) for r in norm])
-        for i in range(n)
-    ]
-
-    def render(cells):
-        return "  ".join(f"{str(c):{a}{w}}" for c, w, a in zip(cells, widths, aligns))
-
-    out = [render(headers), render(["-" * w for w in widths])]
-    out.extend(render(r) for r in norm)
-    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- filtering
