@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.5.1 (2026-07-20)
+
+### Bug Fixes
+
+- **cost-discipline**: Reset by_tool + metered_results on compaction
+  ([`af67dd7`](https://github.com/FreddieMcHeart/claude-core/commit/af67dd7a0937aabcd2956f83d8e903aaaedad5f3))
+
+
 ## v0.5.0 (2026-07-18)
 
 ### Features
