@@ -24,6 +24,17 @@ python lib/cost_ledger_report.py --json     # machine-readable {totals, by_tool,
 
 Use this to find *which* sessions are worth drilling into (highest est result-tokens / $/turn), then run the full JSONL audit below only on those. Note the ledger measures **in-context result volume** (the cache-reread driver, reset per compaction), not billed API cost — the JSONL audit remains the source of truth for actual token spend.
 
+For the *other* half — not what cost, but where the discipline itself was worked past — run the **fire-log report**. The hook appends one line per fired nudge to `~/.claude/state/cost-discipline-log.jsonl`; this ranks the rules that fire most and splits warn/info/block:
+
+```bash
+python lib/fire_log_report.py                    # totals + by-rule + top sessions
+python lib/fire_log_report.py --rule edit_loop   # drill one rule, incl. file hotspots
+python lib/fire_log_report.py --since 2026-07-14
+python lib/fire_log_report.py --json             # {totals, by_rule, top_sessions}
+```
+
+A high `block` count or a rule dominating the fires is where the workflow most often hits its guardrails — the input to tuning a rule's threshold or your own habits.
+
 ## Workflow
 
 1. **Identify target sessions.** Unless the user gives a date range, default to "today + last full working day". Session JSONL files live in `~/.claude/projects/<project-slug>/*.jsonl`. Sort by mtime; pick all files modified within the range.
