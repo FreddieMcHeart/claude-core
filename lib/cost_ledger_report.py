@@ -28,6 +28,8 @@ import json
 import sys
 from pathlib import Path
 
+from _report_table import table as _table
+
 DEFAULT_DIR = Path.home() / ".claude" / "cost-ledger"
 
 
@@ -145,28 +147,6 @@ def per_session_rows(ledgers, top=15):
 
 
 # ---------------------------------------------------------------- formatting
-
-def _table(headers, rows, aligns=None):
-    """Render a fixed-width text table. aligns: list of '<'/'>' per column.
-
-    Rows are normalised to the header count (short rows padded, long rows
-    truncated) so a mismatched row can never silently drop a header column via
-    ``zip``'s shortest-tuple behaviour."""
-    n = len(headers)
-    norm = [list(r)[:n] + [""] * (n - len(r)) for r in rows]
-    aligns = aligns or ["<"] * n
-    widths = [
-        max([len(str(headers[i]))] + [len(str(r[i])) for r in norm])
-        for i in range(n)
-    ]
-
-    def render(cells):
-        return "  ".join(f"{str(c):{a}{w}}" for c, w, a in zip(cells, widths, aligns))
-
-    out = [render(headers), render(["-" * w for w in widths])]
-    out.extend(render(r) for r in norm)
-    return "\n".join(out)
-
 
 def format_report(all_ledgers, top=15, show_all=False, since=None):
     shown = filter_ledgers(all_ledgers, show_all=show_all, since=since)

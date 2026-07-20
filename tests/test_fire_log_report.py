@@ -1,9 +1,11 @@
 """Tests for lib/fire_log_report.py — the cost-discipline fire-log summary."""
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 MOD = Path(__file__).resolve().parents[1] / "lib" / "fire_log_report.py"
+sys.path.insert(0, str(MOD.parent))  # so the module's `from _report_table import ...` resolves
 spec = importlib.util.spec_from_file_location("fire_log_report", MOD)
 rpt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rpt)
