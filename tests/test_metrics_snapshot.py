@@ -36,8 +36,9 @@ def test_in_window():
     assert ms._in_window("2026-07-19", "2026-07-15", None)
     assert not ms._in_window("2026-07-10", "2026-07-15", None)
     assert not ms._in_window("2026-07-20", None, "2026-07-19")
-    assert ms._in_window("", None, None)           # undateable passes when no lower bound
-    assert not ms._in_window("", "2026-07-15", None)
+    assert ms._in_window("", None, None)              # fully-open window admits undateable
+    assert not ms._in_window("", "2026-07-15", None)  # a lower bound excludes undateable
+    assert not ms._in_window("", None, "2026-07-19")  # an upper bound excludes it too
 
 
 # ---------------- metrics ----------------
@@ -75,10 +76,17 @@ def test_firelog_metrics():
     ]
     m = ms.firelog_metrics(fires)
     assert m["n_fires"] == 3
-    assert m["n_sessions_with_fires"] == 2
-    assert m["fires_per_session_mean"] == 1.5
-    assert m["block_rate"] == round(1 / 3, 3)
-    assert m["volume_rule_fires_per_session"]["aggregate_15"] == 1.0  # 2 fires / 2 sessions
+    assert m["n_firing_sessions"] == 2
+    assert m["fires_per_firing_session_mean"] == 1.5
+    assert m["block_rate_of_fires"] == round(1 / 3, 3)
+    assert m["volume_rule_fires_per_firing_session"]["aggregate_15"] == 1.0  # 2 fires / 2 sessions
+
+
+def test_firelog_metrics_empty_cohort_reports_zero_not_one():
+    m = ms.firelog_metrics([])
+    assert m["n_fires"] == 0
+    assert m["n_firing_sessions"] == 0  # not a phantom 1 from the safe divisor
+    assert m["fires_per_firing_session_mean"] == 0.0
 
 
 # ---------------- snapshot / windowing ----------------
@@ -91,6 +99,7 @@ def test_build_snapshot_windows_both_sources():
     assert snap["fire_log"]["n_fires"] == 1
     assert snap["window"]["since"] == "2026-07-15"
     assert snap["label"] == "t"
+    assert any("since the last compaction" in c.lower() for c in snap["caveats"])
 
 
 # ---------------- compare ----------------
@@ -100,8 +109,18 @@ def test_format_compare_has_rows_and_delta():
     b = ms.build_snapshot("post", [_led("b", "2026-07-19", tokens=100)], [_fire("b", "2026-07-19", "streak_4")])
     out = ms.format_compare(a, b)
     assert "COMPARE" in out and "pre" in out and "post" in out
-    row = next(ln for ln in out.splitlines() if "tokens/sess mean" in ln)
+    row = next(ln for ln in out.splitlines() if "tokens/sess* mean" in ln)
     assert "200" in row and "100" in row  # the drop is visible in the row
+
+
+def test_format_compare_marks_metrics_missing_from_one_side():
+    a = ms.build_snapshot("pre", [_led("a", "2026-07-19")], [_fire("a", "2026-07-19", "streak_4")])
+    b = ms.build_snapshot("post", [_led("b", "2026-07-19")], [_fire("b", "2026-07-19", "streak_4")])
+    b["fire_log"]["volume_rule_fires_per_firing_session"]["a_new_rule"] = 2.0  # only in B
+    out = ms.format_compare(a, b)
+    row = next(ln for ln in out.splitlines() if "a_new_rule" in ln)
+    assert "only-B" in row     # surfaced, not silently dropped...
+    assert "-100" not in row   # ...and not misreported as a 100% drop
 
 
 # ---------------- cli ----------------
