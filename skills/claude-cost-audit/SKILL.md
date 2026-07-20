@@ -35,6 +35,18 @@ python lib/fire_log_report.py --json             # {totals, by_rule, top_session
 
 A high `block` count or a rule dominating the fires is where the workflow most often hits its guardrails — the input to tuning a rule's threshold or your own habits.
 
+To measure a change over time (before/after adopting a tool or habit), freeze a labelled **cohort baseline** of both sources and diff two cohorts later:
+
+```bash
+python lib/metrics_snapshot.py capture --label pre-change   # -> ~/.claude/metrics-baselines/
+# ... time passes / intervention lands ...
+python lib/metrics_snapshot.py capture --label post-change
+python lib/metrics_snapshot.py compare ~/.claude/metrics-baselines/pre-change.json \
+                                       ~/.claude/metrics-baselines/post-change.json
+```
+
+Metrics are normalised per session (mean/median). Caveat baked into the tool's own docs: per-session means do **not** control for task mix — a delta is only signal when the two cohorts do comparable work and n is large. Primary bloat outcomes: `result_tokens_est`/session and the volume-driven fire rate.
+
 ## Workflow
 
 1. **Identify target sessions.** Unless the user gives a date range, default to "today + last full working day". Session JSONL files live in `~/.claude/projects/<project-slug>/*.jsonl`. Sort by mtime; pick all files modified within the range.
