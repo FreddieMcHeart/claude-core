@@ -123,7 +123,7 @@ MECH_BASH_ESCALATION = 8
 
 FORCE_LOAD_RULES = """**Cost discipline reminder (auto-loaded each session):**
 
-- Default session main is now **Opus 4.8** (high effort). Opus ≈ 1.7–5× Sonnet per token — switch to `/model sonnet` for routine/mechanical phases; reserve Opus for architecture, cross-repo synthesis, root-cause. Delegation discipline pays most on an Opus main.
+- Default session main is now **Opus 5** (high effort) at $5/$25 per MTok — same rate as Opus 4.8, so the 4.8→5 move is cost-neutral per token. Opus ≈ **2.5× Sonnet 5** per token today, ~1.7× once Sonnet 5's intro rate ends **2026-08-31** — switch to `/model sonnet` for routine/mechanical phases; reserve Opus for architecture, cross-repo synthesis, root-cause. Delegation discipline pays most on an Opus main.
 - Effort: `ultrathink` in a prompt is an in-context nudge only — it does NOT raise the effort level. For a bigger reasoning budget use `/effort high|xhigh`. Hooks cannot change effort.
 - After **15 inline mechanical reads** (Bash/Read/Grep/Glob) → next read goes to a Haiku scout. Hook will warn at 15.
 - After **4 consecutive read-only calls** → delegate or write something concrete. Hook will warn.
