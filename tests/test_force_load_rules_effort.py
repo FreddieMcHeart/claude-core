@@ -36,15 +36,45 @@ def _settings(monkeypatch, tmp_path, payload):
 def test_effort_is_read_from_settings(monkeypatch, tmp_path):
     _settings(monkeypatch, tmp_path, {"model": "opus[1m]", "effortLevel": "high"})
     assert cd.get_main_effort_level() == "high"
-    assert "(high effort)" in cd.force_load_rules()
+    assert "(high effort per user settings)" in cd.force_load_rules()
 
 
 def test_effort_change_is_reflected_without_a_code_edit(monkeypatch, tmp_path):
     """The whole point of 3g: /effort xhigh must change the reminder."""
     _settings(monkeypatch, tmp_path, {"model": "opus[1m]", "effortLevel": "xhigh"})
     text = cd.force_load_rules()
-    assert "(xhigh effort)" in text
-    assert "(high effort)" not in text.replace("(xhigh effort)", "")
+    assert "(xhigh effort per user settings)" in text
+
+
+def test_malformed_effort_never_disarms_model_detection(monkeypatch, tmp_path):
+    """Regression, caught in review 2026-07-26 before shipping.
+
+    The effort parse was inlined in _refresh_model_cache's try block, so a
+    non-string `effortLevel` raised on .strip(), fell into the shared except, and
+    reset value/name to False/"unknown" — silently disarming every
+    expensive-model gate on an Opus session. A less-critical field must never be
+    able to poison a more critical one.
+    """
+    for bad in (3, {"level": "high"}, ["high"], True):
+        _settings(monkeypatch, tmp_path, {"model": "opus[1m]", "effortLevel": bad})
+        assert cd.is_expensive_main_model() is True, f"gates disarmed by {bad!r}"
+        assert cd.get_main_model_name() == "opus", f"model lost by {bad!r}"
+        assert cd.get_main_effort_level() == "unknown", f"bad value echoed: {bad!r}"
+
+
+def test_unrecognised_effort_is_not_echoed_as_fact(monkeypatch, tmp_path):
+    """A typo means Claude Code fell back to its default, so repeating it lies."""
+    _settings(monkeypatch, tmp_path, {"model": "opus[1m]", "effortLevel": "hgih"})
+    assert cd.get_main_effort_level() == "unknown"
+    text = cd.force_load_rules()
+    assert "hgih" not in text
+    assert "(effort per the Claude Code default)" in text
+
+
+def test_effort_value_is_normalised(monkeypatch, tmp_path):
+    """Casing and stray whitespace shouldn't push a valid level into 'unknown'."""
+    _settings(monkeypatch, tmp_path, {"model": "opus[1m]", "effortLevel": "  XHigh  "})
+    assert cd.get_main_effort_level() == "xhigh"
 
 
 def test_missing_effort_key_degrades_to_neutral_phrase(monkeypatch, tmp_path):

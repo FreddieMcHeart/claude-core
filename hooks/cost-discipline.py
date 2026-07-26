@@ -162,6 +162,33 @@ def write_session_pid_marker(session_id):
 _EXPENSIVE_MODEL_CACHE = {"value": None, "name": None, "effort": None, "checked_at": 0.0}
 _EXPENSIVE_MODEL_TTL = 60.0  # seconds
 
+_KNOWN_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+def _parse_effort(settings):
+    """Effort level from a settings dict → a known level, or unset|unknown.
+
+    Deliberately raise-safe and separate from the model parse. Effort is the less
+    critical of the two facts, and a malformed value must never be able to poison
+    model detection — which is exactly what happened when this was inlined in
+    _refresh_model_cache's try block: a non-string `effortLevel` (e.g. `3`) raised
+    on .strip(), fell into the shared except, and reset value/name to
+    False/"unknown", silently disarming every expensive-model gate on an Opus
+    session. Same silent-disarm class as the 2026-06-10 Fable incident noted in
+    _refresh_model_cache; caught in review 2026-07-26 before it shipped.
+
+    An unrecognised level returns "unknown" rather than being echoed: Claude Code
+    falls back to its own default on a value it doesn't recognise, so repeating a
+    typo like "hgih" would state a level the session is not running at.
+    """
+    try:
+        raw = str(settings.get("effortLevel") or "").strip().lower()
+    except Exception:
+        return "unknown"
+    if not raw:
+        return "unset"
+    return raw if raw in _KNOWN_EFFORT_LEVELS else "unknown"
+
 
 def _refresh_model_cache():
     """Read settings.json, populate cache with both bool (is-opus) and name string.
@@ -199,10 +226,9 @@ def _refresh_model_cache():
         # price-per-token, so the session reminder quotes it. Read it rather than
         # hardcoding it: a hardcoded value goes stale the moment anyone runs
         # `/effort`, and a reminder that misstates the live config trains the
-        # reader to distrust the rest of it.
-        _EXPENSIVE_MODEL_CACHE["effort"] = (
-            (settings.get("effortLevel") or "").strip().lower() or "unset"
-        )
+        # reader to distrust the rest of it. _parse_effort is raise-safe — see
+        # the note there for why that isolation is load-bearing.
+        _EXPENSIVE_MODEL_CACHE["effort"] = _parse_effort(settings)
         _EXPENSIVE_MODEL_CACHE["checked_at"] = now
     except Exception:
         # Don't cache a read failure for the full TTL — leave checked_at=0 so a
@@ -229,12 +255,19 @@ def get_main_model_name():
 
 
 def get_main_effort_level():
-    """Configured reasoning effort from settings.json `effortLevel`:
+    """Reasoning effort from the USER settings.json `effortLevel`:
     low|medium|high|xhigh|max, or unset|unknown. Cached for 60s with the model.
 
-    Only the effort is derivable from settings.json — the model *version* is not,
-    because settings carries a family alias ("opus[1m]"). The reminder's model
-    name therefore stays hardcoded and needs a hand edit on a tier release.
+    Reads ~/.claude/settings.json only. A project `.claude/settings.json` or
+    `settings.local.json` takes precedence over it, so this is the user-level
+    value, not necessarily the session's effective one — which is why the
+    reminder attributes it to user settings rather than asserting it flatly.
+    Implementing the full precedence chain would mean guessing Claude Code's
+    merge order, and a confidently-wrong banner is worse than a scoped one.
+
+    Only the effort is derivable this way — the model *version* is not, because
+    settings carries a family alias ("opus[1m]"). The reminder's model name
+    therefore stays hardcoded and needs a hand edit on a tier release.
     """
     _refresh_model_cache()
     return _EXPENSIVE_MODEL_CACHE["effort"]
@@ -245,12 +278,17 @@ def force_load_rules():
 
     Substituted with str.replace, not str.format: the reminder body is markdown
     and may grow literal braces, which .format would raise on.
+
+    The phrase names its source ("per user settings") because a project-level
+    settings file can override it — see get_main_effort_level. Unset/unknown
+    degrades to the neutral phrase rather than emitting a level we can't stand
+    behind.
     """
     effort = get_main_effort_level()
     phrase = (
         "(effort per the Claude Code default)"
         if effort in ("unset", "unknown", "")
-        else f"({effort} effort)"
+        else f"({effort} effort per user settings)"
     )
     return FORCE_LOAD_RULES.replace("{{EFFORT}}", phrase)
 
