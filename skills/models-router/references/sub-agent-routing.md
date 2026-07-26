@@ -23,6 +23,8 @@ Priority: latency first, cost second, capability ceiling as the hard constraint.
 
 Fable is disabled (2026-06-12); sub-agent tiers are haiku/sonnet/opus. Escalation caps at opus.
 
+**Effort is not a sub-agent knob here.** The `Agent` tool takes `model` but no effort parameter — a dispatched sub-agent runs at the session's effort. Only Workflow scripts can set it per call, via `agent(..., {effort})`; use `low` there for mechanical stages and reserve the higher tiers for adversarial verify or judge stages. So for sub-agents the model tier is still the whole decision, unlike the main agent (see `main-agent-routing.md` → "The second axis").
+
 ## Escalation chains
 
 When a sub-agent returns insufficient results, escalate model **and** refine the prompt. A better model with the same bad prompt produces the same bad result.
