@@ -17,7 +17,7 @@ The only valid skip condition: the user's message is pure chat with no tool acti
 
 **Core principle:** Delegate every bulk-reading, bulk-querying, or bulk-writing action to a sub-agent when the threshold pays off. Main-agent tokens are the most expensive tokens in the session; sub-agent results ride in summarized. Hand-off cost is ~20k tokens fixed — below that threshold, inline. Above, delegate.
 
-This skill is the companion to `models-router`: `models-router` picks the tier (Haiku / Sonnet / Opus); this skill picks *whether and when to delegate at all*. Apply both.
+This skill is the companion to `models-router`: `models-router` picks the tier **and the effort level** (Haiku / Sonnet / Opus × `low`…`max`); this skill picks *whether and when to delegate at all*. Apply both.
 
 ## The three questions — ask in order, before any tool call
 
@@ -51,10 +51,38 @@ Task: *"Walk me through how our auth flow works across the platform."*
 
 **Anti-pattern caught:** Main agent reads 8 auth files sequentially, emits a 5k-word writeup, blows the session cost budget on a routine explanation. This skill forces the delegation at Question 1.
 
+## The other failure mode: over-delegation on an Opus 5 main
+
+Everything above guards *under*-delegation, which was the dominant waste pattern through Opus 4.8 — that model under-reached for sub-agents and had to be pushed. **Opus 5 reaches for them readily**, so on an Opus 5 main the failure mode inverts and this skill needs a ceiling as well as a floor.
+
+A sub-agent costs more than its own tokens: it re-establishes context, re-explores ground the caller already covered, reports back, and then the caller reads the report. Delegate when that overhead is clearly repaid — not by reflex.
+
+**Do NOT delegate:**
+- Work you could finish yourself in a handful of tool calls — a few reads, a couple of edits, one narrow search.
+- Review or verification of your own work. That belongs in the main loop; a verifier sub-agent is usually redundant on Opus 5, which self-verifies.
+- One modest job sliced across several parallel agents. Parallel fan-out is for genuinely independent tracks, not for splitting a single task.
+
+**Do delegate:** genuinely independent, parallelisable tracks; wide multi-file or multi-repo investigation; anything whose verbose output would otherwise flood main's prefix.
+
+**When you do delegate:** brief precisely the first time (avoid dispatch → wait → re-brief), commit to the result (never re-derive a sub-agent's findings yourself), keep spawn counts low, and send independent dispatches in one message so they run concurrently.
+
+### This does NOT relax the streak rule
+
+The 4-consecutive-read rule and this ceiling answer **different questions**. Reading one as licence to break the other is the trap:
+
+| Rule | Question it answers | Axis |
+|---|---|---|
+| 4-read streak → delegate or write | *Should this next read happen in main at all?* | whether |
+| Over-delegation ceiling (above) | *How many agents for this task, and for what?* | how many |
+
+"I could finish this in a handful of tool calls" is a reason to keep the *work* in main — and simultaneously a reason the streak rule still prices those calls, because inline reads on an expensive main are exactly what it exists to catch. The ceiling governs fan-out width; it never raises the streak floor.
+
 ## Common mistakes
 
 | Thought | Reality |
 |---|---|
+| "Opus 5 handles delegation well, so delegate freely" | Opus 5 over-delegates by default. Each agent re-establishes context and reports back, then you re-read the report. Cap the fan-out; see the section above. |
+| "I'll have a sub-agent double-check this" | Opus 5 self-verifies. A verifier sub-agent is usually redundant — keep verification in the main loop. |
 | "Just one more peek — it's faster than dispatching" | That's the 4th peek. The streak rule exists to break this cycle. |
 | "I already read 3 files, the 4th is free" | No — the 4th is the one that pushes main-agent context past the sub-agent overhead break-even. Delegate NOW. |
 | "The sub-agent won't find what I'd find" | Then your prompt is too vague. Re-prompt with specific paths and a question, don't re-read in main. |
@@ -62,7 +90,7 @@ Task: *"Walk me through how our auth flow works across the platform."*
 | "I can squeeze a bit more out of this session before /clear" | The prefix cost on every subsequent turn compounds. `/clear` at phase boundaries is always cheaper after ~50 tool calls. |
 | "The user wants a long writeup in the response" | Writeup should be written to a file by a sub-agent, referenced in the response. Main emits pointers, not prose. |
 | "It's a simple search, Grep is fine in main" | Check the expected result size. >50 lines → Haiku. <50 → fine. |
-| "This is quick and one-off" | Quick one-offs on Opus main cost 5× Sonnet sub-agent. Delegate anyway. |
+| "This is quick and one-off" | Quick one-offs on Opus main cost ~1.7–2.5× a Sonnet sub-agent and 5× a Haiku one — before counting the reasoning tokens an Opus turn spends and a scout doesn't. Delegate anyway. |
 
 ## Escalation rule
 

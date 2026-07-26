@@ -46,7 +46,7 @@ Cost of over-delegation (~20k wasted tokens + 5s latency) is higher than cost of
 
 When about to emit >4k output tokens of prose in main, **stop**. Delegate composition to a Haiku or Sonnet sub-agent with a `Write` target path. Main emits a pointer to the written file, not the prose itself.
 
-Why: output tokens are uncached, expensive, and reasoning-tokens on a high-effort main model are priced at the main-model rate. A 5k-token writeup on Opus main costs ~5× the same writeup on Sonnet sub-agent. And sub-agents emit `Write` calls that land durably on disk — the prose survives a `/clear`.
+Why: output tokens are uncached, expensive, and reasoning-tokens on a high-effort main model are priced at the main-model rate. A 5k-token writeup on Opus main costs ~1.7–2.5× the same writeup on a Sonnet sub-agent (2.5× while Sonnet 5's intro rate runs to 2026-08-31, ~1.7× after) and ~5× on a Haiku one — plus the reasoning tokens the Opus turn spends and the scout doesn't. And sub-agents emit `Write` calls that land durably on disk — the prose survives a `/clear`.
 
 ## Escalation when a Haiku sub-agent returns shallow output
 
