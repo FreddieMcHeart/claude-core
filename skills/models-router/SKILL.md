@@ -1,8 +1,8 @@
 ---
 name: models-router
 description: Use BEFORE any tool call, sub-agent dispatch, or substantive response on ANY multi-step task. Triggers at task start, at phase boundaries (plan→execute→document), before every Agent tool call, when a session crosses ~3 MB JSONL or ~50 tool calls, when a sub-agent returns shallow output (escalation), and on phrases like "which model", "pick a model", "should I use Opus", "is Sonnet enough", "switch model", "is this Opus-worthy", "cheaper model", "Opus vs Sonnet", "Haiku vs Sonnet".
-last_validated: 2026-06-12
-validated_against: claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5
+last_validated: 2026-07-26
+validated_against: claude-opus-5, claude-sonnet-5, claude-haiku-4-5
 notes: Re-validate after any Anthropic release that changes default reasoning effort or per-tier pricing. See docs/brain/claude-code-postmortem-2026-04-23.md for precedent.
 scope: core
 ---
@@ -19,9 +19,11 @@ The only valid skip condition: the user's message is pure chat with no action im
 
 ## The three questions — ask in order, before any tool call
 
-1. **Is this routine or deep-thinking?**
-   - Routine (tool-call-heavy, deterministic, narrow spec) → Sonnet main.
-   - Deep-thinking (architecture, multi-repo reasoning, root-cause debugging) → Opus main (now the top tier).
+1. **Which model AND which effort?** Two axes that multiply — the tier sets price per token, effort sets how many tokens get spent. Answer both; a model choice alone is not a route.
+   - Routine (tool-call-heavy, deterministic, narrow spec) → Sonnet main, `medium`.
+   - Coding / agentic across several files → Sonnet main, `high`; escalate to Opus `xhigh` if the output comes back shallow.
+   - Deep-thinking (architecture, multi-repo reasoning, root-cause debugging) → Opus main (our top tier — Fable 5 is disabled here), start `xhigh`, then sweep down.
+   - **Opus 5 costs the same per token as Opus 4.8, so the tier bump is no longer where cost moves — effort is.** Its `low`/`medium` are unusually strong; effort defaults carried from an older model do not transfer.
    - For a finer call, score the task 1–5 (the complexity probe) and route by score — the SAME score also sets how finely to decompose. Cheap signals only; never burn an Opus turn to score. Details: `references/complexity-probe.md`
    - Details: `references/main-agent-routing.md`
 
@@ -44,7 +46,7 @@ Task: *"Close these 4 tickets and post a status update to Slack."*
 
 Signal → 100% routine, tool-call-heavy, no reasoning load.
 Decision → `/model sonnet`, no sub-agent (too small to justify ~20k dispatch overhead).
-Anti-pattern caught → Staying on Opus "because the session started on Opus." Four ticket updates + one Slack message on Opus is ~5× Sonnet's cost for identical output.
+Anti-pattern caught → Staying on Opus "because the session started on Opus." Four ticket updates + one Slack message on Opus is ~1.7–2.5× Sonnet's cost for identical output (2.5× while Sonnet 5's intro rate runs to 2026-08-31, ~1.7× after) — and more than that once the effort difference is counted, since those turns need none.
 
 ## Common mistakes
 
