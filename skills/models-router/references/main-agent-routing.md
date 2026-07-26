@@ -77,7 +77,7 @@ Five levels: `low` / `medium` / `high` / `xhigh` / `max`. The API default is `hi
 
 ### Open question — not settled on our workloads
 
-Is "Opus 5 at `medium`" cheaper than "Sonnet 5 at `high`" for a given task class? Both axes multiply and Sonnet 5 also burns ~30% more tokens per unit of text (new tokenizer), so the answer is workload-specific and cannot be read off a price table. It needs a controlled A/B — same task set, vary one axis — per `docs/core/brain/claude-core/measuring-interventions-controlled-ab-2026-07-20`. Until that runs, the Sonnet-first default above stands; do not quietly promote a guess into the routing rule.
+Is "Opus 5 at `medium`" cheaper than "Sonnet 5 at `high`" for a given task class? A price table cannot answer it. The per-token gap is ~1.7–2.5×, and it is *not* amplified per character — Opus 5 and Sonnet 5 share the newer tokenizer, so the ~30% inflation applies to both sides and cancels out (see `claude-cost-audit/references/pricing.md`; the ~30% only differentiates either of them from Sonnet 4.6 or Haiku 4.5). What the table can't show is the other axis: how many tokens each level actually spends on your task, which is workload-specific. It needs a controlled A/B — same task set, vary one axis — per `docs/core/brain/claude-core/measuring-interventions-controlled-ab-2026-07-20`. Until that runs, the Sonnet-first default above stands; do not quietly promote a guess into the routing rule.
 
 ## Operational constraints (2026-07)
 
