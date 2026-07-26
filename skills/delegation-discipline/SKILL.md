@@ -77,6 +77,8 @@ The 4-consecutive-read rule and this ceiling answer **different questions**. Rea
 
 "I could finish this in a handful of tool calls" is a reason to keep the *work* in main — and simultaneously a reason the streak rule still prices those calls, because inline reads on an expensive main are exactly what it exists to catch. The ceiling governs fan-out width; it never raises the streak floor.
 
+**When both fire, take the streak rule's other branch.** Say you need five reads to land one edit. At read 4 the streak rule demands *delegate or write something concrete*, and the ceiling says don't delegate this. So write: make the edit you have been gathering context for, then continue reading if you still need to. "Neither" is not on the menu — between them the two rules always leave exactly one action available, never zero. If you find yourself concluding that both rules block you, you have mistaken the ceiling for a licence to keep reading.
+
 ## Common mistakes
 
 | Thought | Reality |
