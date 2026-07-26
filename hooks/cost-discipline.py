@@ -123,7 +123,7 @@ MECH_BASH_ESCALATION = 8
 
 FORCE_LOAD_RULES = """**Cost discipline reminder (auto-loaded each session):**
 
-- Default session main is now **Opus 5** (high effort) at $5/$25 per MTok — same rate as Opus 4.8, so the 4.8→5 move is cost-neutral per token. Opus ≈ **2.5× Sonnet 5** per token today, ~1.7× once Sonnet 5's intro rate ends **2026-08-31** — switch to `/model sonnet` for routine/mechanical phases; reserve Opus for architecture, cross-repo synthesis, root-cause. Delegation discipline pays most on an Opus main.
+- Default session main is now **Opus 5** {{EFFORT}} at $5/$25 per MTok — same rate as Opus 4.8, so the 4.8→5 move is cost-neutral per token. Opus ≈ **2.5× Sonnet 5** per token today, ~1.7× once Sonnet 5's intro rate ends **2026-08-31** — switch to `/model sonnet` for routine/mechanical phases; reserve Opus for architecture, cross-repo synthesis, root-cause. Delegation discipline pays most on an Opus main.
 - Effort: `ultrathink` in a prompt is an in-context nudge only — it does NOT raise the effort level. For a bigger reasoning budget use `/effort high|xhigh`. Hooks cannot change effort.
 - After **15 inline mechanical reads** (Bash/Read/Grep/Glob) → next read goes to a Haiku scout. Hook will warn at 15.
 - After **4 consecutive read-only calls** → delegate or write something concrete. Hook will warn.
@@ -159,7 +159,7 @@ def write_session_pid_marker(session_id):
         pass
 
 
-_EXPENSIVE_MODEL_CACHE = {"value": None, "name": None, "checked_at": 0.0}
+_EXPENSIVE_MODEL_CACHE = {"value": None, "name": None, "effort": None, "checked_at": 0.0}
 _EXPENSIVE_MODEL_TTL = 60.0  # seconds
 
 
@@ -195,6 +195,14 @@ def _refresh_model_cache():
         # Fable 5 is $10/$50 MTok — 2x Opus 4.8. Both count as expensive.
         _EXPENSIVE_MODEL_CACHE["value"] = name in ("opus", "fable")
         _EXPENSIVE_MODEL_CACHE["name"] = name
+        # Reasoning effort multiplies token volume the way the tier multiplies
+        # price-per-token, so the session reminder quotes it. Read it rather than
+        # hardcoding it: a hardcoded value goes stale the moment anyone runs
+        # `/effort`, and a reminder that misstates the live config trains the
+        # reader to distrust the rest of it.
+        _EXPENSIVE_MODEL_CACHE["effort"] = (
+            (settings.get("effortLevel") or "").strip().lower() or "unset"
+        )
         _EXPENSIVE_MODEL_CACHE["checked_at"] = now
     except Exception:
         # Don't cache a read failure for the full TTL — leave checked_at=0 so a
@@ -202,6 +210,7 @@ def _refresh_model_cache():
         # instead of pinning "unknown" (and disarming the model-tier gates) for 60s.
         _EXPENSIVE_MODEL_CACHE["value"] = False
         _EXPENSIVE_MODEL_CACHE["name"] = "unknown"
+        _EXPENSIVE_MODEL_CACHE["effort"] = "unknown"
         _EXPENSIVE_MODEL_CACHE["checked_at"] = 0.0
 
 
@@ -217,6 +226,33 @@ def get_main_model_name():
     """
     _refresh_model_cache()
     return _EXPENSIVE_MODEL_CACHE["name"]
+
+
+def get_main_effort_level():
+    """Configured reasoning effort from settings.json `effortLevel`:
+    low|medium|high|xhigh|max, or unset|unknown. Cached for 60s with the model.
+
+    Only the effort is derivable from settings.json — the model *version* is not,
+    because settings carries a family alias ("opus[1m]"). The reminder's model
+    name therefore stays hardcoded and needs a hand edit on a tier release.
+    """
+    _refresh_model_cache()
+    return _EXPENSIVE_MODEL_CACHE["effort"]
+
+
+def force_load_rules():
+    """FORCE_LOAD_RULES with the live effort level substituted for {{EFFORT}}.
+
+    Substituted with str.replace, not str.format: the reminder body is markdown
+    and may grow literal braces, which .format would raise on.
+    """
+    effort = get_main_effort_level()
+    phrase = (
+        "(effort per the Claude Code default)"
+        if effort in ("unset", "unknown", "")
+        else f"({effort} effort)"
+    )
+    return FORCE_LOAD_RULES.replace("{{EFFORT}}", phrase)
 
 
 # Mechanical-Bash classifier: returns True for routine commands a cheap model
@@ -1611,7 +1647,7 @@ def handle_session_start(payload):
     # Emit the critical rules banner FIRST; the cost-ledger seed is best-effort and
     # must never be sequenced ahead of session-start context (a future un-guarded
     # failure there could otherwise preempt the banner).
-    emit_session_context(FORCE_LOAD_RULES)
+    emit_session_context(force_load_rules())
     # Seed the cross-session cost ledger LAST so a session that does no tool calls
     # still appears in the collection (with zeroed counters).
     if session_id:
