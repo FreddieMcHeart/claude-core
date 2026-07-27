@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.10.0 (2026-07-27)
+
+### Features
+
+- **hook**: Detect committed index rows pointing at uncommitted pages
+  ([`d5d9046`](https://github.com/FreddieMcHeart/claude-core/commit/d5d904619235e660b46f88ce02b95f90299fe49c))
+
+
 ## v0.9.0 (2026-07-27)
 
 ### Bug Fixes
