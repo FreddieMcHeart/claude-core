@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.11.0 (2026-07-27)
+
+### Features
+
+- **hook**: Fire a re-validation trigger before a dated claim decays
+  ([`b221a36`](https://github.com/FreddieMcHeart/claude-core/commit/b221a36efe870a277d39363ac4f5475ed919c396))
+
+
 ## v0.10.0 (2026-07-27)
 
 ### Features
