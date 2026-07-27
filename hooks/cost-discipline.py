@@ -111,6 +111,31 @@ WIKI_MAX_DANGLING = 0     # any dangling row is a defect; raise only for a delib
 WIKI_SAMPLE_COUNT = 3     # how many dangling rows to name in the nudge
 WIKI_INDEX_CAP = 24       # index files inspected per scan — a bound, and it is REPORTED when hit
 
+# ---- Dated claims (2026-07-27) ----
+# Some statements in this repo are true on a date and false afterwards, and they
+# decay SILENTLY: nothing raises, no test fails, the prose just stops being true.
+# `pricing.md` was correct on 2026-06-10 and wrong the moment Opus 5 shipped. The
+# session reminder's Opus:Sonnet ratio holds only while Sonnet 5's introductory
+# rate is in force. That is the temporal-coverage mechanism applied to docs —
+# see docs/core/brain/claude-core/unknown-treated-as-permissive-2026-07-15.md.
+#
+# The mitigation that works is a trigger that FIRES, not a note someone has to
+# remember to read. Each row declares what expires, when, and what to re-check.
+# Adding a claim is one row; that is the whole point of making it a table instead
+# of hardcoding the one case that prompted it.
+DATED_CLAIM_LEAD_DAYS = 14   # start nudging this far ahead, so the fix can land before it bites
+DATED_CLAIMS = [
+    {
+        "expires": "2026-08-31",
+        "what": "Sonnet 5 introductory rate ($2/$10 per MTok) — list rate $3/$15 applies from 2026-09-01",
+        "recheck": "confirm Anthropic actually moved to list price, then re-check every "
+                   "Opus:Sonnet ratio stated as prose: FORCE_LOAD_RULES in this file and "
+                   "skills/models-router/references/main-agent-routing.md (~2.5x becomes ~1.7x). "
+                   "The dated rows in skills/claude-cost-audit/references/pricing.md already "
+                   "price per-turn correctly and need confirmation, not editing.",
+    },
+]
+
 READ_TOOLS = {"Bash", "Read", "Grep", "Glob"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
 DISPATCH_TOOLS = {"Agent", "Task"}
@@ -1162,6 +1187,72 @@ def wiki_index_context(state):
     )
 
 
+def _claim_status(claim, today):
+    """('expired'|'due'|'current'|'malformed', days) for one dated claim.
+
+    A malformed or missing `expires` returns 'malformed' rather than being
+    skipped. Skipping is the tempting default and it is unknown -> permissive: a
+    typo in a date silently retires the trigger, and the row still LOOKS like
+    coverage while covering nothing.
+    """
+    try:
+        expires = datetime.fromisoformat(str(claim.get("expires"))).date()
+    except Exception:
+        return ("malformed", None)
+    days = (expires - today).days
+    if days < 0:
+        return ("expired", -days)
+    if days <= DATED_CLAIM_LEAD_DAYS:
+        return ("due", days)
+    return ("current", days)
+
+
+def dated_claims_context(state, today=None):
+    """(advisory_or_None, outcome) for claims at or near their expiry date.
+
+    Outcomes: 'expired' / 'due' / 'malformed' / 'current'. Shares the pulse's
+    throttle. Advisory only — a stale doc is not worth blocking a prompt over.
+
+    `today` is injectable so the tests can stand on both sides of a boundary
+    without touching the clock. A dated check that can only be tested on the day
+    it fires is a check nobody verifies.
+    """
+    seen = state.get("prompts_seen", 0)
+    if seen < 1 or (seen - 1) % HYGIENE_PROMPT_INTERVAL != 0:
+        return (None, None)
+    today = today or datetime.now(timezone.utc).date()
+
+    expired, due, malformed = [], [], []
+    for claim in DATED_CLAIMS:
+        status, days = _claim_status(claim, today)
+        if status == "expired":
+            expired.append((claim, days))
+        elif status == "due":
+            due.append((claim, days))
+        elif status == "malformed":
+            malformed.append(claim)
+
+    if not (expired or due or malformed):
+        return (None, "current")
+
+    lines = []
+    for claim, days in expired:
+        lines.append(f"- **EXPIRED {days}d ago** — {claim['what']}. Re-check: {claim['recheck']}")
+    for claim, days in due:
+        lines.append(f"- expires in {days}d — {claim['what']}. Re-check: {claim['recheck']}")
+    for claim in malformed:
+        lines.append(f"- **unparseable expiry** `{claim.get('expires')!r}` on "
+                     f"{claim.get('what', '<no description>')} — this row is not "
+                     f"protecting anything; fix the date.")
+    outcome = "expired" if expired else ("malformed" if malformed else "due")
+    return (
+        "**Dated claim re-validation** — a statement in this repo is at or past its "
+        "expiry. Nothing has failed; dated prose decays without raising, which is why "
+        "this fires on a clock instead of waiting to be noticed.\n" + "\n".join(lines),
+        outcome,
+    )
+
+
 def rlm_fanout_context(prompt):
     """Layer 2: detect cross-repo-strict investigation prompts.
 
@@ -1199,7 +1290,9 @@ def handle_user_prompt_submit(payload):
       2. wiki index integrity — same throttle; committed index rows pointing at
          uncommitted pages. Logs its outcome even when it emits nothing, so
          "ran and found nothing" stays distinguishable from "never ran".
-      3. Layer 2 cross-repo rlm-fanout suggestion.
+      3. dated-claim re-validation — same throttle; statements in this repo that
+         are true until a date and decay silently after it.
+      4. Layer 2 cross-repo rlm-fanout suggestion.
 
     This handler now writes state (the hygiene pulse needs a prompt counter),
     which the Layer-2 path previously did not. Fail-open throughout.
@@ -1244,6 +1337,18 @@ def handle_user_prompt_submit(payload):
                 )
         except Exception:
             pass  # ditto — an index scan is never worth a broken prompt
+        try:
+            dated, outcome = dated_claims_context(state)
+            if dated:
+                parts.append(dated)
+            if outcome:
+                log_fire(
+                    "dated_claim", session_id,
+                    "warn" if outcome in ("expired", "malformed") else "info",
+                    outcome=outcome,
+                )
+        except Exception:
+            pass  # ditto — its own handler, for the same reason as the two above
 
     rlm = rlm_fanout_context(prompt)
     if rlm:
