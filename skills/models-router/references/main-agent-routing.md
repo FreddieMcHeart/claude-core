@@ -75,9 +75,30 @@ Five levels: `low` / `medium` / `high` / `xhigh` / `max`. The API default is `hi
 - **Thinking is ON by default on Opus 5** — unlike Opus 4.8, where omitting the `thinking` parameter meant no thinking at all. There is no cheap no-thinking Opus turn any more; every Opus 5 turn carries reasoning tokens. (For API code, not sessions: `thinking: disabled` is accepted only at effort `high` or below — pairing it with `xhigh`/`max` returns a 400.)
 - **Sub-agents don't take an effort parameter** from the `Agent` tool — only `model`. Workflow scripts can set it per call via `agent(..., {effort})`; use `low` there for mechanical stages.
 
-### Open question — not settled on our workloads
+### Measured 2026-07-27: Sonnet 5 @ `high` beat Opus 5 @ `medium` on cost at equal success
 
-Is "Opus 5 at `medium`" cheaper than "Sonnet 5 at `high`" for a given task class? A price table cannot answer it. The per-token gap is ~1.7–2.5×, and it is *not* amplified per character — Opus 5 and Sonnet 5 share the newer tokenizer, so the ~30% inflation applies to both sides and cancels out (see `claude-cost-audit/references/pricing.md`; the ~30% only differentiates either of them from Sonnet 4.6 or Haiku 4.5). What the table can't show is the other axis: how many tokens each level actually spends on your task, which is workload-specific. It needs a controlled A/B — same task set, vary one axis — per `docs/core/brain/claude-core/measuring-interventions-controlled-ab-2026-07-20`. Until that runs, the Sonnet-first default above stands; do not quietly promote a guess into the routing rule.
+Previously recorded here as an open question. It has now been run as a controlled A/B — same task set, one axis varied — per `docs/core/brain/claude-core/measuring-interventions-controlled-ab-2026-07-20`.
+
+**Setup.** n=15 seeded single-line defects in this repo (comparison flips, dropped `not`, `and`/`or` swaps) across 7 files, each materialised as a repo whose single commit already contains the defect, so `git log` cannot reveal it. Every candidate mutation was kept only if it actually broke 1–8 tests; **28 of 44 mechanical mutations broke nothing at all**, and without that filter most "tasks" would have been vacuous. Both arms got byte-identical starting states and an identical prompt. Scored externally: suite green **and** nothing under `tests/` modified.
+
+**Result.**
+
+| Arm | Pass | Cost | Output | Turns | Cache read |
+|---|---|---|---|---|---|
+| Opus 5 @ `medium` | 15/15 | $9.31 | 14,967 | 131 | 4.26M |
+| Sonnet 5 @ `high` | 15/15 | **$4.92** | 21,763 | 187 | 7.18M |
+
+Sonnet @ `high` spent **more of everything** — 1.45× the output, 1.43× the turns, 1.69× the cache reads — and still cost 1.89× less, because a ~1.5× token gap does not close a 2.5× price gap. That is the mechanism, and it is the transferable part: on a task class where both tiers succeed, the effort axis has to move tokens by more than the tier ratio before the expensive tier wins.
+
+**This margin has an expiry date.** At Sonnet 5's list rate (from 2026-09-01) the same measured token counts give $7.38 versus $9.31 — still cheaper, but 1.26× rather than 1.89×. A dated claim in `hooks/cost-discipline.py` (`DATED_CLAIMS`) fires ahead of that boundary.
+
+**What this does NOT establish.** Four limits, each of which would change the answer:
+- **Pass rate saturated at 15/15**, so the experiment has a ceiling effect and detects no quality difference. The finding is "equal cost-effectiveness at equal *perfect* success on an easy task class", not "equal capability".
+- **One narrow task class** — localise and repair a single wrong line, 4–6 tool calls. Says nothing about investigation, multi-file design, or review, which are the tasks the Opus default exists for.
+- **Sub-agent turns, not main sessions.** Effort can only be set programmatically inside a Workflow script, so the arms were sub-agents. The rule above governs main sessions; confirming there is a separate stage.
+- **Effort was asserted, not verified.** The transcripts confirm the models (`claude-opus-5`, `claude-sonnet-5`) but carry no effort field, so "medium" and "high" rest on the API honouring the parameter.
+
+Sonnet-first therefore stands, now with a measurement behind it on this task class rather than an assumption — and with its scope stated so it is not over-read.
 
 ## Operational constraints (2026-07)
 

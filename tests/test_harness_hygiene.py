@@ -250,7 +250,7 @@ def test_throttle_skips_the_scan_entirely(monkeypatch):
 
 # ---------------- handler payload merging ----------------
 
-def _run_handler(monkeypatch, capsys, hyg=None, rlm=None, wiki=(None, None)):
+def _run_handler(monkeypatch, capsys, hyg=None, rlm=None, wiki=(None, None), dated=None):
     monkeypatch.setattr(cd, "load_state", lambda sid: {"session_id": sid, "prompts_seen": 0})
     monkeypatch.setattr(cd, "save_state", lambda state: None)
     monkeypatch.setattr(cd, "log_fire", lambda *a, **k: None)
@@ -261,6 +261,12 @@ def _run_handler(monkeypatch, capsys, hyg=None, rlm=None, wiki=(None, None)):
     # author's real wiki repo. A payload-merging test that depends on the state of
     # a repo outside the test tree is not testing payload merging.
     monkeypatch.setattr(cd, "wiki_index_context", lambda state: wiki)
+    # Stubbed to keep these tests OUT OF TIME. The shipped dated-claim table is
+    # silent today and becomes "due" 14 days before its expiry, at which point an
+    # unstubbed call would start injecting a third advisory and break assertions
+    # here on a date with no code change — the very decay the feature exists to
+    # catch, planted in the suite that guards it.
+    monkeypatch.setattr(cd, "dated_claims_context", lambda state: (dated, None))
     cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "hi"})
     out = capsys.readouterr().out.strip()
     return json.loads(out) if out else None
