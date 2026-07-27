@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.11.1 (2026-07-27)
+
+### Bug Fixes
+
+- **hook**: Stop counting refused calls, and stop printing the bypass
+  ([`f7072ce`](https://github.com/FreddieMcHeart/claude-core/commit/f7072ce62d0144cf5d094c1ec997376d3a2dcc18))
+
+
 ## v0.11.0 (2026-07-27)
 
 ### Features
