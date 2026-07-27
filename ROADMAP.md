@@ -20,6 +20,38 @@ Touches `hooks/cost-discipline.py`; a `perf`/`refactor` change with no behaviour
 change. Wants the same treatment as the rest of the suite: test + independent
 review before merge.
 
+### A relay child ran bulk log reads inline on Opus 5 — the discipline did not fire
+
+Observed 2026-07-27, reported by the user. Session `8bdf4617` handed a task to
+child `8d52d413`; the child inherited the parent's model (Opus 5) and pulled and
+read GCP logs **directly in its own main context**, call after call, instead of
+dispatching Haiku/Sonnet readers. It kept doing so until the human asked
+*"maybe it would be much better to use subagents with sonnet/haiku for collecting
+and reading logs instead of the expensive main session?"* — i.e. the correction
+came from the human, not from the harness.
+
+Every layer that should have caught this had a reason not to, and they are worth
+separating because they need different fixes:
+
+- **Model inheritance.** A relay child takes the parent's model by default, so an
+  Opus parent silently makes an Opus child. Nothing in the dispatch says "this
+  child does log reading", which is Haiku work.
+- **The reader-agent reflex is skill content**, so it only fires if the child
+  loaded `delegation-discipline` — and a child primed from a relay message may
+  never have.
+- **The hard-block tier could not fire.** Whether it was armed depends on
+  `$CLAUDE_JOB_DIR`, which is the inverted-exemption defect (see PR #23): a
+  background child is exempt outright, and a foreground one shares its parent's
+  counter. Neither case is the one the tier was written for.
+- **Warnings are ignored 82–88%** per the 2026-06-27 audit, which is why the block
+  tier exists at all — and this instance never reached it.
+
+This is the first observed *end-to-end* instance of the waste pattern the whole
+harness exists to prevent, with a human as the only functioning gate. Worth
+treating as the motivating case when the agent-detection fix lands, and worth
+asking whether a relay dispatch should carry an explicit model floor rather than
+inheriting.
+
 ### Promote the hot-path review rule to CLAUDE.md
 
 Candidate rule: **"Independent review before merge for hot-path code, mandatory
