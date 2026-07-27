@@ -250,12 +250,17 @@ def test_throttle_skips_the_scan_entirely(monkeypatch):
 
 # ---------------- handler payload merging ----------------
 
-def _run_handler(monkeypatch, capsys, hyg=None, rlm=None):
+def _run_handler(monkeypatch, capsys, hyg=None, rlm=None, wiki=(None, None)):
     monkeypatch.setattr(cd, "load_state", lambda sid: {"session_id": sid, "prompts_seen": 0})
     monkeypatch.setattr(cd, "save_state", lambda state: None)
     monkeypatch.setattr(cd, "log_fire", lambda *a, **k: None)
     monkeypatch.setattr(cd, "hygiene_context", lambda state: hyg)
     monkeypatch.setattr(cd, "rlm_fanout_context", lambda prompt: rlm)
+    # Stubbed for the same reason as the other two: prompts_seen starts at 0 here,
+    # so the throttle lets the wiki check through and it would shell out to the
+    # author's real wiki repo. A payload-merging test that depends on the state of
+    # a repo outside the test tree is not testing payload merging.
+    monkeypatch.setattr(cd, "wiki_index_context", lambda state: wiki)
     cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "hi"})
     out = capsys.readouterr().out.strip()
     return json.loads(out) if out else None

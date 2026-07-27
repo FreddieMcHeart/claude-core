@@ -83,6 +83,34 @@ AGENT_DIRS = [
     Path(_PROJECT_ROOT) / ".claude" / "agents",
 ]
 
+# ---- Wiki index integrity (2026-07-27) ----
+# An index row committed while its target page is still untracked is CORRECT when
+# written and dangling from the next clone onward: the author sees a working link
+# because the file is on their disk, so nothing looks wrong from where they stand.
+# The population the link resolves against changed after the row was written — the
+# same temporal-coverage shape as a dated reference file decaying, and the third
+# recorded instance of it. See
+# docs/core/brain/claude-core/unknown-treated-as-permissive-2026-07-15.md.
+#
+# It lives in the pulse rather than in a document on purpose: the check is cheap,
+# mechanical, and has to run REPEATEDLY. A page can only teach it; a rule that must
+# hold at every commit belongs where something fires at every commit.
+#
+# Both sides of the comparison are read from HEAD, never from the worktree. That is
+# the whole correctness of the check: an uncommitted row pointing at an uncommitted
+# page is legitimate work in flight, and reading either side from disk would either
+# hide the real defect or invent one. HEAD-vs-HEAD is what a fresh clone sees.
+WIKI_DIR = Path(_WIKI_PATH)
+# Scope, stated rather than implied: per-topic index files only. `hot.md` carries
+# wikilinks too and has the identical property, but it is a churning
+# fast-orientation cache whose rows are routinely written ahead of the pages they
+# point at, so nudging on it would fire on normal work. A frozenset, not a string,
+# so widening the scope is a data change and stays visible here.
+WIKI_INDEX_NAMES = frozenset({"_index.md"})
+WIKI_MAX_DANGLING = 0     # any dangling row is a defect; raise only for a deliberate amnesty
+WIKI_SAMPLE_COUNT = 3     # how many dangling rows to name in the nudge
+WIKI_INDEX_CAP = 24       # index files inspected per scan — a bound, and it is REPORTED when hit
+
 READ_TOOLS = {"Bash", "Read", "Grep", "Glob"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
 DISPATCH_TOOLS = {"Agent", "Task"}
@@ -991,6 +1019,149 @@ def hygiene_context(state):
     )
 
 
+_WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
+_INLINE_CODE_RE = re.compile(r"`[^`]*`")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+
+
+def _wikilinks_in(text):
+    """Wikilink targets in `text`, ignoring markup that only LOOKS like a link.
+
+    Returns (targets, unterminated_fence). `targets` is normalised: alias and
+    heading fragments stripped, external URLs dropped.
+
+    Why this is not a `[[` grep: a naive text scan counts prose. The same
+    validator this pattern came from counted `<rect` occurrences that were all
+    inside HTML comments, skipped its own check as a result, and a verification
+    grep written later in the same session repeated the trap with `<script`.
+    An index file documenting the link convention will contain `[[example]]`
+    inside a code fence, and nudging about it trains the reader to ignore the
+    nudge. So: comments stripped, fenced blocks skipped, inline spans stripped.
+
+    An unterminated fence is REPORTED, not swallowed. Skipping the rest of the
+    file would under-report — the permissive direction — and silence from a
+    check that stopped reading is the failure this whole check exists to avoid.
+    """
+    text = _HTML_COMMENT_RE.sub("", text)
+    targets, fence, marker = [], False, ""
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if fence:
+            if stripped.startswith(marker):
+                fence, marker = False, ""
+            continue
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fence, marker = True, stripped[:3]
+            continue
+        for raw in _WIKILINK_RE.findall(_INLINE_CODE_RE.sub("", line)):
+            target = raw.split("|", 1)[0].split("#", 1)[0].strip()
+            if not target or "://" in target:
+                continue
+            targets.append(target)
+    return targets, fence
+
+
+def wiki_index_scan(repo=None):
+    """Committed index rows whose target page is not committed.
+
+    Returns (dangling, links, indexes, truncated, unparsed) on a real
+    measurement, or None when the check COULD NOT LOOK — path absent, not a git
+    repo, git missing/failing/too slow, or no index file present at HEAD.
+
+    None and "zero dangling" are different answers and the caller must keep them
+    apart. A `wiki_path` pointing somewhere without index files is the empty-set
+    vacuity case: every per-row test passes because there are no rows, and
+    reporting that as clean is a check that never looked reporting success.
+    """
+    repo = WIKI_DIR if repo is None else Path(repo)
+    if not repo.is_dir():
+        return None
+
+    def git(*args):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                capture_output=True, text=True, errors="surrogateescape",
+                timeout=HYGIENE_GIT_TIMEOUT,
+            )
+        except Exception:
+            return None
+        return proc.stdout if proc.returncode == 0 else None
+
+    # Tracked-at-HEAD, not `ls-files`: the staging area can hold a page that is
+    # added but not yet committed, and a row pointing at one of those is exactly
+    # the defect. Both sides of the comparison must come from the same tree.
+    listing = git("ls-tree", "-r", "HEAD", "--name-only", "-z")
+    if listing is None:
+        return None
+    tracked = {p for p in listing.split("\0") if p}
+    if not tracked:
+        return None
+
+    stems = {p[:-3].rsplit("/", 1)[-1] for p in tracked if p.endswith(".md")}
+    index_paths = sorted(p for p in tracked if p.rsplit("/", 1)[-1] in WIKI_INDEX_NAMES)
+    if not index_paths:
+        return None
+
+    truncated = max(0, len(index_paths) - WIKI_INDEX_CAP)
+    dangling, links, unparsed = [], 0, []
+    for path in index_paths[:WIKI_INDEX_CAP]:
+        content = git("show", f"HEAD:{path}")
+        if content is None:
+            unparsed.append(path)
+            continue
+        targets, open_fence = _wikilinks_in(content)
+        if open_fence:
+            unparsed.append(path)
+        for target in targets:
+            links += 1
+            if "/" in target:
+                if target in tracked or f"{target}.md" in tracked:
+                    continue
+            elif target in stems:
+                continue
+            dangling.append((path, target))
+    return (dangling, links, len(index_paths) - truncated, truncated, unparsed)
+
+
+def wiki_index_context(state):
+    """(advisory_or_None, outcome) for the wiki index-integrity check.
+
+    `outcome` is one of "skipped" / "clean" / "dangling" and is logged even when
+    no advisory is emitted. That is the point: an advisory-only check that stays
+    silent on both "nothing wrong" and "could not run" is indistinguishable from
+    one that was never wired up, and the fire log is the only place the
+    difference can be observed after the fact.
+
+    Shares the pulse's throttle — first prompt of a session, then every
+    HYGIENE_PROMPT_INTERVAL-th. Advisory only; a dangling row never blocks work.
+    """
+    seen = state.get("prompts_seen", 0)
+    if seen < 1 or (seen - 1) % HYGIENE_PROMPT_INTERVAL != 0:
+        return (None, None)
+    scan = wiki_index_scan()
+    if scan is None:
+        return (None, "skipped")
+    dangling, links, indexes, truncated, unparsed = scan
+    if len(dangling) <= WIKI_MAX_DANGLING:
+        return (None, "clean")
+
+    listed = ", ".join(f"[[{t}]] (in {p})" for p, t in dangling[:WIKI_SAMPLE_COUNT])
+    caveats = []
+    if truncated:
+        caveats.append(f"{truncated} further index files not inspected (cap {WIKI_INDEX_CAP})")
+    if unparsed:
+        caveats.append(f"{len(unparsed)} not fully scanned ({', '.join(unparsed)})")
+    tail = f" Incomplete coverage: {'; '.join(caveats)}." if caveats else ""
+    return (
+        f"**Wiki index integrity** — {len(dangling)} committed index row(s) point at a page "
+        f"that is NOT committed ({links} links across {indexes} index files checked). The link "
+        f"works on this machine because the file is on disk, and is dangling in every clone. "
+        f"Either commit the page or drop the row. Sample: {listed}.{tail}",
+        "dangling",
+    )
+
+
 def rlm_fanout_context(prompt):
     """Layer 2: detect cross-repo-strict investigation prompts.
 
@@ -1025,7 +1196,10 @@ def handle_user_prompt_submit(payload):
 
       1. harness-hygiene pulse — throttled; fires on prompt 1 of a session and
          every HYGIENE_PROMPT_INTERVAL-th after.
-      2. Layer 2 cross-repo rlm-fanout suggestion.
+      2. wiki index integrity — same throttle; committed index rows pointing at
+         uncommitted pages. Logs its outcome even when it emits nothing, so
+         "ran and found nothing" stays distinguishable from "never ran".
+      3. Layer 2 cross-repo rlm-fanout suggestion.
 
     This handler now writes state (the hygiene pulse needs a prompt counter),
     which the Layer-2 path previously did not. Fail-open throughout.
@@ -1034,17 +1208,42 @@ def handle_user_prompt_submit(payload):
     prompt = payload.get("prompt") or ""
     parts = []
 
+    state = None
     if session_id:
         try:
             state = load_state(session_id)
             state["prompts_seen"] = state.get("prompts_seen", 0) + 1
             save_state(state)
+        except Exception:
+            state = None  # no counter, no throttle — both advisories stand down
+
+    # One try PER advisory, deliberately. Sharing a handler between two of them is
+    # the shape of the 2026-07-26 silent-disarm (a cheap sibling's exception reached
+    # a shared `except` and reset a load-bearing result): a fault in the hygiene
+    # scan would otherwise take the wiki check offline with no trace anywhere.
+    if state is not None:
+        try:
             hyg = hygiene_context(state)
             if hyg:
                 parts.append(hyg)
                 log_fire("harness_hygiene", session_id, "warn")
         except Exception:
             pass  # hygiene must never break the prompt
+        try:
+            wiki, outcome = wiki_index_context(state)
+            if wiki:
+                parts.append(wiki)
+            # Logged on every non-throttled run, including the silent outcomes.
+            # A check that only speaks up when it finds something cannot be told
+            # apart from a check that is not running at all.
+            if outcome:
+                log_fire(
+                    "wiki_index_integrity", session_id,
+                    "warn" if outcome == "dangling" else "info",
+                    outcome=outcome,
+                )
+        except Exception:
+            pass  # ditto — an index scan is never worth a broken prompt
 
     rlm = rlm_fanout_context(prompt)
     if rlm:
