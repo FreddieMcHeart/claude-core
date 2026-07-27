@@ -601,7 +601,13 @@ def emit_block(reason):
 # ---- Hard-block gating + forbidden-Bash-read detection (2026-06-27 self-audit) ----
 def blocks_enabled():
     """Hard blocks are gated three ways, all fail-safe toward NOT blocking:
-      1. env kill-switch CC_DISCIPLINE_BLOCK=0 → advisory-only;
+      1. env kill-switch CC_DISCIPLINE_BLOCK=0 → advisory-only. DELIBERATELY NOT
+         ADVERTISED in the block messages any more (2026-07-27): a blocked agent
+         read the override out of the text that blocked it and proposed exporting
+         it, because the bypass was the copyable line in a message whose remedies
+         were prose. The switch still works and is documented here and in README
+         for a human who wants it — the change is who finds it, not whether it
+         exists. Do not re-add it to an emit_block string;
       2. agent/background-job sessions are exempt — reader/scout sub-agents are
          SUPPOSED to read in bulk, and the hook can't tell a scout's reads from a
          main-agent inline streak, so it errs toward not blocking them (blocking a
@@ -1401,8 +1407,7 @@ def handle_pre_tool(payload):
                 "🛑 `cat <file>` to read a source file — use the Read tool instead. "
                 "cat dumps the whole file into context with no line numbers and no range; "
                 "Read gives you offset/limit and peek-first. Transform pipelines "
-                "(cat x | grep y) and heredocs are unaffected. "
-                "(Override on this machine: export CC_DISCIPLINE_BLOCK=0)")
+                "(cat x | grep y) and heredocs are unaffected.")
             return
         if is_ls_find_as_glob(_bcmd):
             fire_once(state, "bash_ls_find_as_glob",
@@ -1448,30 +1453,55 @@ def handle_pre_tool(payload):
 
     # ---------- Aggregate / streak (read-only mechanical tools) ----------
     if tool_name in READ_TOOLS:
-        state["aggregate_reads"] += 1
-        state["read_streak"] = state.get("read_streak", 0) + 1
-        state["recent_tools"].append(tool_name)
-        state["recent_tools"] = state["recent_tools"][-5:]
+        # Count PROSPECTIVELY and commit only if the call is let through. A blocked
+        # call never runs, so counting it made the counter measure work that did not
+        # happen — and each retry pushed it further over, which is why the block
+        # felt inescapable for reasons the threshold alone did not explain (observed
+        # 2026-07-27: 40 -> 41 across two refused attempts). Refusing without
+        # counting holds the reported number still while blocked, so the only way
+        # the number moves is a call that actually read something.
+        _aggregate = state["aggregate_reads"] + 1
+        _streak = state.get("read_streak", 0) + 1
 
         # ---- Hard-block tier (2026-06-27 self-audit) — short-circuits before the warns ----
         if blocks_enabled() and (
-                state["read_streak"] >= STREAK_BLOCK_THRESHOLD
-                or state["aggregate_reads"] >= AGGREGATE_BLOCK_THRESHOLD):
-            _streaky = state["read_streak"] >= STREAK_BLOCK_THRESHOLD
-            _n = state["read_streak"] if _streaky else state["aggregate_reads"]
-            save_state(state)
+                _streak >= STREAK_BLOCK_THRESHOLD
+                or _aggregate >= AGGREGATE_BLOCK_THRESHOLD):
+            _streaky = _streak >= STREAK_BLOCK_THRESHOLD
+            _n = _streak if _streaky else _aggregate
+            save_state(state)  # earlier mutations only — the counters stay deliberately unchanged
             log_fire("block_read_streak" if _streaky else "block_aggregate_reads",
                      session_id, "block", count=_n, tool_name=tool_name)
+            # The remedy list is PER TIER on purpose. A write resets the streak but
+            # not the session aggregate, so offering "write something concrete" to
+            # an aggregate-blocked session hands out a cure that leaves it blocked —
+            # and a remedy the check itself defeats is the defect this whole message
+            # was rewritten for. No override is advertised here either: the bypass
+            # was the copyable line in a message whose remedies were an argument,
+            # and the copyable half is the half that gets obeyed.
+            _remedies = (
+                "Do ONE: (a) dispatch a Haiku reader/scout to take over the reading "
+                "(Agent with model: haiku); (b) write/edit something concrete; or (c) "
+                "/clear and re-prime from a plan file — the streak resets on any of the three."
+                if _streaky else
+                "Do ONE: (a) dispatch a Haiku reader/scout to take over the reading "
+                "(Agent with model: haiku); or (b) /clear and re-prime from a plan file. "
+                "A write does NOT reset the session aggregate — only a dispatch or /clear does."
+            )
             emit_block(
-                f"🛑 Read-discipline hard-block: {_n} "
+                f"🛑 Read-discipline hard-block: this would be your {_n}th "
                 + ("consecutive " if _streaky else "")
-                + "inline read-only calls in main with no delegation — the pattern the "
-                "2026-06-27 audit found running unchecked (warnings ignored 82-88%). Do ONE: "
-                "(a) dispatch a Haiku reader/scout to take over the reading "
-                "(Agent with model: haiku); (b) write/edit something concrete; or (c) /clear and "
-                "re-prime from a plan file. The counter resets on any dispatch or /clear. "
-                "(Override on this machine: export CC_DISCIPLINE_BLOCK=0)")
+                + "inline read-only call in main with no delegation — the pattern the "
+                "2026-06-27 audit found running unchecked (warnings ignored 82-88%). "
+                + _remedies
+                + " This refused call is not counted, so the number will not climb while "
+                "you are blocked.")
             return
+
+        state["aggregate_reads"] = _aggregate
+        state["read_streak"] = _streak
+        state["recent_tools"].append(tool_name)
+        state["recent_tools"] = state["recent_tools"][-5:]
 
         if state["aggregate_reads"] == AGGREGATE_THRESHOLD:
             fire_once(state, "aggregate_15",
