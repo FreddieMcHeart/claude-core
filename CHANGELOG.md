@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.9.0 (2026-07-27)
+
+### Bug Fixes
+
+- Correct four defects found by self-review of this branch
+  ([`0dcd355`](https://github.com/FreddieMcHeart/claude-core/commit/0dcd35592bf0264b813af10ec7916dd64bfb0b0f))
+
+- Repair five defects found by review of this branch
+  ([`3b2a0b2`](https://github.com/FreddieMcHeart/claude-core/commit/3b2a0b2281ed1f098e56123d133ae927bdfac81a))
+
+- **cost-audit**: Price Opus 5 + Sonnet 5, normalise model IDs
+  ([`3a991a0`](https://github.com/FreddieMcHeart/claude-core/commit/3a991a069c72bd914ddadee3933480990fde6c9e))
+
+- **hook**: Name Opus 5 as the default main in the session reminder
+  ([`df35201`](https://github.com/FreddieMcHeart/claude-core/commit/df352018aa905c183672a389aef5a352ce8c367b))
+
+### Documentation
+
+- Add ROADMAP.md — durable index of open follow-ups
+  ([`59368c3`](https://github.com/FreddieMcHeart/claude-core/commit/59368c3b23d7249218c2829203313adf73bc8cc5))
+
+### Features
+
+- **delegation-discipline**: Add an over-delegation ceiling for an Opus 5 main
+  ([`4299ce6`](https://github.com/FreddieMcHeart/claude-core/commit/4299ce6e4a86cc3d223987f00ba35951bd57d322))
+
+- **hook**: Read effortLevel from settings so the reminder can't go stale
+  ([`41d5ee1`](https://github.com/FreddieMcHeart/claude-core/commit/41d5ee1f517b465f7bd4cff98d73f2dda44e0c54))
+
+- **models-router**: Make effort a first-class routing axis
+  ([`0dcd074`](https://github.com/FreddieMcHeart/claude-core/commit/0dcd07499a2e62849919129aef9e1cf08fedaa30))
+
+
 ## v0.8.1 (2026-07-20)
 
 ### Bug Fixes
