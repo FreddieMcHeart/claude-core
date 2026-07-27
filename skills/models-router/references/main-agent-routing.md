@@ -74,6 +74,7 @@ Five levels: `low` / `medium` / `high` / `xhigh` / `max`. The API default is `hi
 - **Higher effort can cost less on agentic work.** More thinking up front often means fewer turns and fewer tool calls, so `xhigh` on a long autonomous task can beat `medium` on total spend. That is why the rule is *sweep and measure per route*, not *always pick the cheapest level*.
 - **Thinking is ON by default on Opus 5** — unlike Opus 4.8, where omitting the `thinking` parameter meant no thinking at all. There is no cheap no-thinking Opus turn any more; every Opus 5 turn carries reasoning tokens. (For API code, not sessions: `thinking: disabled` is accepted only at effort `high` or below — pairing it with `xhigh`/`max` returns a 400.)
 - **Sub-agents don't take an effort parameter** from the `Agent` tool — only `model`. Workflow scripts can set it per call via `agent(..., {effort})`; use `low` there for mechanical stages.
+- **A headless main session takes both axes on the command line**: `claude -p "<task>" --model sonnet --effort high --output-format json`. That is a real main session, not a sub-agent — its own `session_id`, its own init, the full skill/hook/CLAUDE.md environment — and the JSON result carries `total_cost_usd` and a per-model `modelUsage` breakdown directly, so cost needs no transcript parsing. This is the mechanism for measuring routing decisions against the thing the rules actually govern.
 
 ### Measured 2026-07-27: Sonnet 5 @ `high` beat Opus 5 @ `medium` on cost at equal success
 
@@ -88,14 +89,30 @@ Previously recorded here as an open question. It has now been run as a controlle
 | Opus 5 @ `medium` | 15/15 | $9.31 | 14,967 | 131 | 4.26M |
 | Sonnet 5 @ `high` | 15/15 | **$4.92** | 21,763 | 187 | 7.18M |
 
-Sonnet @ `high` spent **more of everything** — 1.45× the output, 1.43× the turns, 1.69× the cache reads — and still cost 1.89× less, because a ~1.5× token gap does not close a 2.5× price gap. That is the mechanism, and it is the transferable part: on a task class where both tiers succeed, the effort axis has to move tokens by more than the tier ratio before the expensive tier wins.
+Sonnet @ `high` spent **more of everything** — 1.45× the output, 1.43× the turns, 1.69× the cache reads — and still cost 1.89× less, because a ~1.5× token gap does not close a 2.5× price gap.
+
+### Stage 2 (real main sessions): the 1.89× did NOT reproduce
+
+Run the same seeded defects as real headless main sessions — `claude -p --model … --effort …`, which is the population this rule actually governs — and the gap collapses. n=4, so treat the numbers as a direction check rather than an estimate:
+
+| Arm | Pass | Total | Per attempt | Per success |
+|---|---|---|---|---|
+| Opus 5 @ `medium` | 3/4 | $1.70 | **$0.42** | $0.57 |
+| Sonnet 5 @ `high` | 4/4 | $1.90 | $0.48 | **$0.48** |
+
+Per *attempt* Opus @ `medium` was slightly **cheaper**. Its one failure was `API Error: Response stalled mid-stream` — infrastructure, not capability, and two of its four runs ran ~275s against ~45s for everything else. Drop the stalled run and per-success is $0.47 vs $0.48: a tie.
+
+**Why the screen overstated it, and this is the transferable part.** Stage 1 ran sub-agents, where 73% of spend is *cache creation* — every dispatch builds its own prefix from scratch, and prefix cost scales directly with tier price. A real main session amortises one prefix across many turns, so the tier premium shrinks toward the cost of the actual work. **A sub-agent screen is therefore structurally biased toward the cheaper tier** and its magnitudes do not transfer to main-session routing. Direction may; multiples do not. See [[core/brain/claude-core/fan-out-cost-is-prefix-not-output-2026-07-27]].
+
+Practical consequence for this file: Sonnet-first still stands, now on a 4/4-vs-3/4 success reading rather than on a cost gap — and the cost gap between these two routes on real sessions is, at n=4, not measurable.
 
 **This margin has an expiry date.** At Sonnet 5's list rate (from 2026-09-01) the same measured token counts give $7.38 versus $9.31 — still cheaper, but 1.26× rather than 1.89×. A dated claim in `hooks/cost-discipline.py` (`DATED_CLAIMS`) fires ahead of that boundary.
 
 **What this does NOT establish.** Four limits, each of which would change the answer:
 - **Pass rate saturated at 15/15**, so the experiment has a ceiling effect and detects no quality difference. The finding is "equal cost-effectiveness at equal *perfect* success on an easy task class", not "equal capability".
 - **One narrow task class** — localise and repair a single wrong line, 4–6 tool calls. Says nothing about investigation, multi-file design, or review, which are the tasks the Opus default exists for.
-- **Sub-agent turns, not main sessions.** Effort can only be set programmatically inside a Workflow script, so the arms were sub-agents. The rule above governs main sessions; confirming there is a separate stage.
+- **Sub-agent turns, not main sessions.** The arms were sub-agents, so the stage-1 numbers are a proxy for the rule's actual population — and stage 2 above shows the proxy was biased, not merely noisy. Two corrections behind this, both mine: I recorded that effort "can only be set programmatically inside a Workflow script" when `claude -p --model … --effort …` sets both axes on a real main session and always could (the constraint is true of the `Agent` tool; I generalised it without checking `claude --help`). And I wrote that effort was unverifiable because the transcripts carry no effort field — the session *environment* carries `CLAUDE_EFFORT`, which I had not looked at. Both are the same move: generalising from the one place I happened to look.
+- **Effort DOES reach a Workflow sub-agent — measured 2026-07-27.** Four trials at `low` and four at `max`, same model and task: the sub-agents reported `CLAUDE_EFFORT` equal to the requested level, and output tokens separated ~2.4× in the same direction (49k mean at `low`, 118k at `max`). Two independent readings agreeing, so the stage-1 arm labels are earned. Note the ratio is an upper bound — the trial puzzle turned out to have no solution, which plausibly inflates the high-effort arm more.
 - **Effort was asserted, not verified.** The transcripts confirm the models (`claude-opus-5`, `claude-sonnet-5`) but carry no effort field, so "medium" and "high" rest on the API honouring the parameter.
 
 Sonnet-first therefore stands, now with a measurement behind it on this task class rather than an assumption — and with its scope stated so it is not over-read.
