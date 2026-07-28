@@ -2107,6 +2107,113 @@ def handle_post_compact(payload):
     emit(reminder)
 
 
+# ======================================================================
+# TEMPORARY payload probe (2026-07-28) — DELETE THIS BLOCK AND ITS CALL SITE
+# ======================================================================
+# Why it exists. `blocks_enabled()` exempts "agent" sessions, but
+# `detect_session_mode()` keys on $CLAUDE_JOB_DIR — the BACKGROUND-JOB signal —
+# so the exemption lands on background mains and blocks the foreground
+# sub-agents it was written to protect. Fixing that needs a signal that
+# actually identifies an Agent-tool sub-agent, and two prior probes established
+# there is none in the environment visible to a *Bash tool command*.
+#
+# This probe exists because the hook is a DIFFERENT population from that: it is
+# a subprocess the harness spawns directly, not a shell, so its payload and its
+# own environment are a place nobody has looked. Guessing a detector instead of
+# measuring one is how a detector gets built on an assumption — which is the
+# failure this file already has a wiki page about.
+#
+# It records SHAPE, not data. `tool_input`/`tool_response` carry file contents,
+# command strings and plausibly secrets, so under those subtrees only key paths
+# and value types are written, never a value. Environment VARIABLE NAMES are
+# recorded in full and values never are — and the names are deliberately NOT
+# filtered to a `CLAUDE_`/`CC_` prefix, because filtering to where you expect
+# the answer is exactly how the last two probes missed.
+#
+# Off unless explicitly switched on, by either of two routes:
+#   * env  CC_PAYLOAD_PROBE=/path/to/probe.jsonl   (set before launching Claude)
+#   * file /tmp/cc-payload-probe.path containing that path
+# The file route is not redundant. A hook process inherits its environment when
+# Claude Code launches, so a mid-session `export` never reaches it — and the
+# session we most want to probe is one already running.
+PAYLOAD_PROBE_MARKER = Path("/tmp/cc-payload-probe.path")
+PAYLOAD_PROBE_MAX_VALUE = 120   # scalars longer than this are truncated
+PAYLOAD_PROBE_MAX_KEYS = 400    # bound on one record; REPORTED when hit, not silent
+PAYLOAD_PROBE_MAX_DEPTH = 12
+# Subtrees whose values are never written — only their key paths and types.
+PAYLOAD_PROBE_OPAQUE = frozenset({"tool_input", "tool_response", "prompt", "content"})
+_PROBE_SECRETY = re.compile(r"key|token|secret|password|passwd|auth|credential", re.I)
+
+
+def _probe_target():
+    """Path to append to, or None when the probe is switched off."""
+    raw = (os.environ.get("CC_PAYLOAD_PROBE") or "").strip()
+    if not raw:
+        try:
+            raw = PAYLOAD_PROBE_MARKER.read_text().strip()
+        except Exception:
+            return None
+    return raw or None
+
+
+def _probe_walk(node, path, out, opaque, depth=0):
+    """Map every key path to a type, and to a value only where that is safe.
+
+    `opaque` latches ON as soon as any ancestor is an opaque key and never
+    turns back off, so a nested value cannot escape redaction by sitting deeper
+    than the subtree root.
+    """
+    if len(out) >= PAYLOAD_PROBE_MAX_KEYS or depth > PAYLOAD_PROBE_MAX_DEPTH:
+        return
+    if isinstance(node, dict):
+        if path:
+            out[path] = f"dict({len(node)})"
+        for key in sorted(node, key=str):
+            child = f"{path}.{key}" if path else str(key)
+            _probe_walk(node[key], child, out,
+                        opaque or str(key) in PAYLOAD_PROBE_OPAQUE, depth + 1)
+        return
+    if isinstance(node, list):
+        out[path] = f"list({len(node)})"
+        if node:   # first element only — enough to learn the shape, and bounded
+            _probe_walk(node[0], f"{path}[0]", out, opaque, depth + 1)
+        return
+    kind = type(node).__name__
+    if opaque or _PROBE_SECRETY.search(path):
+        out[path] = kind
+        return
+    text = str(node)
+    if len(text) > PAYLOAD_PROBE_MAX_VALUE:
+        text = text[:PAYLOAD_PROBE_MAX_VALUE] + "…"
+    out[path] = f"{kind}={text}"
+
+
+def probe_payload(mode, payload):
+    """Append one shape record per hook invocation. No-op unless switched on."""
+    target = _probe_target()
+    if target is None:
+        return
+    try:
+        shape = {}
+        _probe_walk(payload, "", shape, opaque=False)
+        record = {
+            "ts": time.time(),
+            "mode": mode,
+            "pid": os.getpid(),
+            "ppid": os.getppid(),     # a sub-agent's hook may hang off a different parent
+            "truncated": len(shape) >= PAYLOAD_PROBE_MAX_KEYS,
+            "shape": shape,
+            "env_names": sorted(os.environ),   # NAMES ONLY — never values
+        }
+        with open(target, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass   # a probe must never break the hook it is measuring
+# ======================================================================
+# END TEMPORARY payload probe
+# ======================================================================
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -2114,6 +2221,8 @@ def main():
         payload = json.loads(raw) if raw.strip() else {}
     except Exception:
         payload = {}
+
+    probe_payload(mode, payload)   # TEMPORARY — delete with the probe block above
 
     try:
         if mode == "pre-tool":
