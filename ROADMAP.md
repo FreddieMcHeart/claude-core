@@ -30,36 +30,73 @@ dispatching Haiku/Sonnet readers. It kept doing so until the human asked
 and reading logs instead of the expensive main session?"* — i.e. the correction
 came from the human, not from the harness.
 
-Every layer that should have caught this had a reason not to, and they are worth
-separating because they need different fixes:
+**Root cause, established 2026-07-28 by reading the child's transcript rather than
+reasoning about it.** The child made 131 Bash calls and 26 sub-agent dispatches:
+12× `gh-reader`, 6× `slack-reader`, 7× `general-purpose`, 1× `Explore`. It
+delegated to **every reader that existed**. All 11 inline log reads were `gcloud`
+— the one tool with no reader in the fleet.
 
-- **Model inheritance.** A relay child takes the parent's model by default, so an
-  Opus parent silently makes an Opus child. Nothing in the dispatch says "this
-  child does log reading", which is Haiku work.
-- **The reader-agent reflex is skill content**, so it only fires if the child
-  loaded `delegation-discipline` — and a child primed from a relay message may
-  never have.
-- **The hard-block tier could not fire.** Whether it was armed depends on
-  `$CLAUDE_JOB_DIR`, which is the inverted-exemption defect (see PR #23): a
-  background child is exempt outright, and a foreground one shares its parent's
-  counter. Neither case is the one the tier was written for.
+So this was never an awareness failure. It is *the remedy inside the trap* one
+level up: the remedy the rule names — dispatch a reader — did not exist for the
+tool where it was needed, and **a remedy that does not exist from where you are
+standing fails silently.** No error, no warning; the agent does the work itself
+and looks compliant doing it, because it delegated everywhere a delegate was
+available. See `docs/core/brain/claude-core/the-remedy-inside-the-trap-2026-07-27`.
+
+The original four-layer analysis was written from the report, not the transcript.
+Measured, it holds up unevenly — recorded here because the correction is the more
+useful artifact:
+
+- **Model inheritance — still open.** A relay child takes the parent's model, so
+  an Opus parent silently makes an Opus child. Real, but secondary: on Haiku those
+  reads would have been cheaper, and they still should not have been inline. Worth
+  asking whether a relay dispatch should carry an explicit model floor rather than
+  inheriting.
+- ~~**The reader-agent reflex is skill content**, so it only fires if the child
+  loaded `delegation-discipline`.~~ **DISPROVEN, twice.** The relay inbox banner
+  has carried the reflex verbatim since 2026-07-01 — three weeks before the
+  incident — and `delegation-discipline` appears 19 times in the child's
+  transcript. Worse for the original theory: `when-to-delegate.md` already listed
+  `gcloud … list` by name as always-delegate. The rule was present, specific, and
+  loaded.
+- **The hard-block tier could not fire — confirmed, still gated.** `Read-discipline`
+  appears 0 times in the transcript, consistent with the inverted `$CLAUDE_JOB_DIR`
+  exemption (PR #23). Unblocking needs the sub-agent-detection measurement.
 - **Warnings are ignored 82–88%** per the 2026-06-27 audit, which is why the block
   tier exists at all — and this instance never reached it.
 
-This is the first observed *end-to-end* instance of the waste pattern the whole
-harness exists to prevent, with a human as the only functioning gate. Worth
-treating as the motivating case when the agent-detection fix lands, and worth
-asking whether a relay dispatch should carry an explicit model floor rather than
-inheriting.
+**Fixed 2026-07-28:** `gcloud-reader` added to the fleet (read-only, Haiku, rosters
+derived rather than recited), plus a `when-to-delegate.md` subsection making the
+no-reader case explicit — fall back to a generic scout, never to main, and report
+the gap. Six read-only `gcloud logging`/`config`/`services` allowlist entries were
+added with explicit user approval, since a reader that prompts on every call
+recreates the incentive to read inline.
+
+**Still open:** the model floor on relay dispatch, and the hard-block tier, which
+waits on agent detection. This remains the first observed *end-to-end* instance of
+the waste pattern the harness exists to prevent, with a human as the only
+functioning gate — and the lesson that survives is about coverage: a discipline is
+only as good as the reach of the remedy it names.
 
 ### Promote the hot-path review rule to CLAUDE.md
 
-Candidate rule: **"Independent review before merge for hot-path code, mandatory
-where there's no CI."** Flagged in a prior compaction and exercised throughout the
-2026-07-17→20 session — every `hooks/`/`lib/` change got an independent review
-before merge, and that review repeatedly caught real bugs (incl. two "green
-because it isn't looking" instruments). Decide the wording and whether it belongs
-in the generic CLAUDE.md trunk (under *Approach & Scope*) or is claude-core-scoped.
+**DONE 2026-07-28.** Landed in `~/.claude/CLAUDE.md` as its own section, deliberately
+adjacent to *Verify Against the Real Artifact* — the two are siblings: one is about
+what you exercised, the other about who else looked. Scope question resolved in
+favour of the user-level file rather than this repo's trunk, on the same reasoning
+already recorded there for the Cloud Auth rule: a rule must load **before** the
+decision it governs, and a trunk that only loads inside this repo does not.
+
+Wording settled on the sharper trigger — not "where there's no CI" but **wherever CI
+does not actually exercise the changed path**, since a green suite and a lint gate
+scoped to `lib/` + `tests/` say nothing about `hooks/`. It carries its own evidence:
+the block tier held three live defects at once through a green suite because that
+path had never had a single test, and two review rounds on one branch here produced
+commits titled "repair five defects found by review" and "correct four defects found
+by self-review" — nine real defects on a branch its author believed finished.
+
+First application, the same day: the 0.2.0 → 0.11.1 plugin upgrade was reviewed
+before being applied rather than after.
 
 ## Tracked elsewhere (pointers, not duplicated here)
 
