@@ -72,4 +72,14 @@ If a cheaper model returns shallow or incomplete output, escalate the model AND 
 - `references/mixed-mode.md` — Detour / switch / clear+new-session patterns + ratio heuristic
 - `references/complexity-probe.md` — 1–5 score → tier AND decomposition depth; carry score in native Task metadata
 
-Rationale, audit numbers, and model pricing: see `README.md` in the package root.
+Rationale, audit numbers, and model pricing: the measurements live in the wiki, not in this
+package — `docs/core/brain/claude-core/measuring-interventions-controlled-ab-2026-07-20`
+(the controlled A/B behind the routing numbers, including the stage-2 contradiction and why a
+sub-agent screen is biased toward the cheaper tier) and
+`docs/core/brain/claude-core/fan-out-cost-is-prefix-not-output-2026-07-27` (the cost
+breakdown). Current pricing is in `references/main-agent-routing.md`.
+
+This sentence previously pointed at a `README.md` in the package root. That file **never
+existed** — `git log --diff-filter=ADR` over the path returns nothing across the whole
+history. It was a forward promise written as a citation, which is worse than a stale link: a
+stale link has a recoverable past, and this had nothing behind it to recover.
