@@ -1783,11 +1783,13 @@ def handle_pre_tool(payload):
         if fp and fp not in state["files_edited"]:
             state["files_edited"].append(fp)
         # New edit on this file — re-warn / re-escalate allowed if cycle resumes.
-        # The count itself must reset too, not just these membership lists: a
-        # fresh Edit that only cleared the flags but left read_after_edit_counts
-        # intact meant the first Read of a resumed cycle was already at or above
-        # EDIT_LOOP_ESCALATION, so the warn tier could never fire again — the
-        # cycle jumped straight to escalation instead of actually "re-firing".
+        # The count itself must reset too, not just these membership lists: the
+        # two tiers below are independent ifs, not if/elif, so a fresh Edit that
+        # only cleared the flags but left read_after_edit_counts intact meant a
+        # resumed cycle's first Read was already at or above EDIT_LOOP_ESCALATION
+        # — satisfying BOTH thresholds at once and firing warn AND escalation
+        # together on that single Read, instead of "re-firing" gradually the way
+        # a fresh cycle does.
         state.setdefault("read_after_edit_counts", {}).pop(fp, None)
         if fp in state["files_warned_for_reread"]:
             state["files_warned_for_reread"].remove(fp)
