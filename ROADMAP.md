@@ -144,6 +144,53 @@ the rules *feel* weak: there has been nothing to tell us either way. The only tr
 number we have — "warnings ignored 82–88%" — comes from the fire log, a different
 instrument.
 
+#### Design settled 2026-07-30: segments, not a running total
+
+The hard part was never the reset — it was how to accumulate across `SessionStart`
+without double-counting, given `/tmp` state is wiped while the ledger persists. Three
+candidates, and the reason the first two lose is worth keeping:
+
+- **Sum on write — WRONG.** `write_cost_ledger` is called on every `PostToolUse` with
+  the *running total*, not a delta. Adding that to a stored total on each call
+  multiplies rather than accumulates.
+- **A `carried` baseline read at `SessionStart`** — works, but conflates segments into
+  one number and puts the arithmetic on the hot path, where a mistake is silent.
+- **Segments — chosen.** `SessionStart` **appends** a segment; `PostToolUse` updates
+  only the **last** one; `totals` are summed at write time.
+
+```
+{ session_id, cwd, main_model,
+  segments: [ {started_at, tool_calls_total, tool_result_chars, by_tool, dispatches} ],
+  totals:   {…summed at write time…} }
+```
+
+Append-only means no arithmetic can go wrong, and it answers strictly more: a
+resume/compaction boundary is exactly where behaviour changes, and per-segment data
+makes that visible instead of averaging it away.
+
+**Do not suppress empty segments.** A session that started and did nothing is a real
+observation; filtering it to keep the file tidy would be this entry's own vacuity trap
+one layer up. Append it and record the segment count.
+
+**Dispatch counting** sources from `tool_input.subagent_type` on the dispatcher's
+`Agent` call. Count **by type**, not just a total — the question is "did this session
+delegate, and downward to what?", which a bare count cannot answer.
+
+**Sequencing constraint, and it is a hard one.** `build_cost_ledger(state)` reads its
+counters *flat* off the state dict. The agent-detection work (entry below) may nest
+state under `agent_id` for per-agent block scoping — and if it does, these reads find
+nothing and the ledger writes **zeros**, which is *indistinguishable from the bug this
+entry exists to fix*. There would be no way to tell "the gauge works and the session
+was quiet" from "the gauge is reading the wrong dict". So: the gauge lands **after**
+agent detection, and that work must keep session-level counters flat while nesting only
+the per-agent ones. Note `aggregate_reads` is read by *both* the block tier and the
+ledger; if it splits, the two halves need different names, because a name collision is
+how this class of defect survives review.
+
+**Coupling to the deferred perf finding** at the top of this file: a segments list makes
+the per-`PostToolUse` write larger, which raises the priority of throttling that write
+from "nice" to "do it in the same PR".
+
 ### `Bash` counts toward the read streak content-blind
 
 Reported by the parallel Skill-Builder session on 2026-07-27 and unactioned since —
