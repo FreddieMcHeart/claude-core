@@ -93,13 +93,16 @@ def test_post_tool_writes_ledger_on_agent_dispatch_and_resets_counters(tmp_path,
     # prime some read streak, then an Agent dispatch result arrives
     seed = cd.new_state("sdisp")
     seed["aggregate_reads"] = 5
-    seed["read_streak"] = 3
+    seed["agent_counters"]["main"] = {
+        "read_streak": 3, "agent_reads": 5, "warnings_fired": ["aggregate_15"]}
     cd.save_state(seed)
     cd.handle_post_tool({"session_id": "sdisp", "tool_name": "Agent", "tool_response": "ok"})
     state = cd.load_state("sdisp")
     # dispatch path still resets the streak/aggregate counters (no regression)...
     assert state["aggregate_reads"] == 0
-    assert state["read_streak"] == 0
+    assert state["agent_counters"]["main"]["read_streak"] == 0
+    assert state["agent_counters"]["main"]["agent_reads"] == 0
+    assert state["agent_counters"]["main"]["warnings_fired"] == []
     # ...and the ledger was written on this path too
     assert (cd.COST_LEDGER_DIR / "sdisp.json").exists()
 
