@@ -169,9 +169,73 @@ catching the `Bash(cat)` / `Bash(ls)` substitution case via the streak, which th
 streak was partly written for — so it wants its own decision rather than riding
 along with another PR.
 
-Note this reinforces the entry below: a byte counter does not care what a tool *is*,
-so gating on output volume sidesteps the misclassification entirely rather than
-patching it.
+**SUPERSEDED, not deferred** — at the reporter's own request (2026-07-29), and the
+reasoning is theirs: the recommendation above was *"the least-bad way to keep a metric
+that measures the wrong thing."* Byte-gating does not need the read/write
+classification at all, so the misclassification cannot occur rather than being
+mitigated. If the byte counter lands, drop the drop-Bash-from-the-streak proposal
+instead of leaving a live plan pointing at the old metric. Recorded explicitly
+because a superseded proposal left standing reads exactly like an open one.
+
+### Shape a Bash command to return the ANSWER, not the material
+
+Raised 2026-07-30 from a real call. Three separate defects in one command, which is
+why it is worth an entry rather than a habit:
+
+```
+Bash(cd /Users/…/claude-core-wiki && grep -n 'ct">\|cap"><span>\|eyebrow">\|…' \
+     diagrams/downbeat-roadmap.html)
+```
+
+**1. Measured waste: 58% of that output was markup.** 1414 chars returned, 600 chars
+of actual information (`Group writes during a rename #56`), so **814 chars entered
+context for nothing** — ~203 tokens on one call, then re-billed as a cache read every
+subsequent turn until compaction. The wanted answer was a list of roadmap titles; what
+arrived was `<div class="ct">…<span class="ct-ref">#56</span></div>`.
+
+The generalisable rule: **ask the shell for the answer, not for the material to derive
+the answer from.** A grep whose output you then read is a two-stage operation with
+stage 2 running in the most expensive context available. Move stage 2 into the
+command — `grep -o`, a `sed`/`python3 -c` transform, `--output-mode=count`,
+`files_with_matches`. Same information, less residency.
+
+**2. It should not have been `Bash` at all.** The `Grep` tool exists, is separately
+permitted (no command-string matching involved), and carries `head_limit` and
+`output_mode` — which is exactly the stage-2-in-the-command lever. The trunk already
+forbids `Bash(ls)`/`find` as Glob substitutes and says *"Bash because it has pipes"* is
+not a justification; `grep` via Bash is the same rule with a different binary.
+
+**3. The `cd X &&` prefix defeats the hook's own detectors — verified in code.**
+
+Stated carefully, because a *different* claim about this prefix was retracted on
+2026-07-28. **Retracted:** that `cd X &&` causes permission-approval latency — never
+demonstrated, and a control run without the prefix timed identically. **Confirmed by
+reading the code:**
+
+- `is_cat_as_read()` is anchored `^cat\s+` **and bails outright when the command
+  contains `&&`** (the metachar guard). So `cd X && cat file` slips the cat-block
+  while a bare `cat file` is blocked.
+- `is_ls_find_as_glob()` is anchored `^ls\b` / `^find\b`, so the compound form slips
+  that nudge too.
+- And a literal-prefix allow rule (`Bash(grep:*)`) cannot match a command whose first
+  token is `cd`, so the compound form is a different string to every layer that
+  matches on prefixes.
+
+The sharp part: **the hook already knows how to unwrap this.** There is a
+`first == "cd" and "&&" in s` unwrap that recurses on the inner command — in a
+different function. The capability exists and is not applied where it matters most.
+
+Work: extract that unwrap and run both detectors against the inner command.
+**Caution — do not let it become a command parser.** Handle exactly
+`cd <path> && <single command>` and decline anything more complex (`cd A && cat x && rm
+y`) rather than guessing, or this becomes the content classifier that the entry above
+was superseded for avoiding. Hot-path; wants a test per detector and independent
+review.
+
+Note the three defects fail differently and that is the point: #1 is pure cost, #2 is
+a tool-choice habit, #3 is a **safety** hole where the guard is silent rather than
+wrong. Only #3 gets worse the better the guard gets, because every anchored detector
+added to that file inherits the same blind spot.
 
 ### Gate on bytes, not on call count
 
