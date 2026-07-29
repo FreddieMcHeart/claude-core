@@ -144,6 +144,35 @@ the rules *feel* weak: there has been nothing to tell us either way. The only tr
 number we have — "warnings ignored 82–88%" — comes from the fire log, a different
 instrument.
 
+### `Bash` counts toward the read streak content-blind
+
+Reported by the parallel Skill-Builder session on 2026-07-27 and unactioned since —
+recorded here so it stops living only in an inbox.
+
+`READ_TOOLS = {"Bash", "Read", "Grep", "Glob"}` and the aggregate/streak increment
+inspects `tool_name` only, never the command. So `git commit`, `git push`,
+`downbeat send`, a test run and a build all count as *reads*. **A session inflates
+its own read counter with its writes, and the more real work it does the faster it
+trips a threshold meant to catch inline reading.**
+
+Measured relevance: of the ~2,150 tool calls in session `4ca1e8fd`, 1,214 were
+`Bash`, a large share of them commits, pushes, relay sends and test runs. Whatever
+`aggregate_reads` measures, it is not reading.
+
+**Do NOT fix this by classifying command content.** That is a classifier, it will be
+wrong in both directions, and "unknown command → counts as a read" is a fresh
+unknown-treated-as-permissive default in the one file that already has a wiki page
+about them. The cheaper move is to drop `Bash` from the STREAK while keeping it in
+the aggregate: the streak is about consecutive inline *reading*, and `Bash` is the
+only member of that set which is routinely a write. Cost of that change: it gives up
+catching the `Bash(cat)` / `Bash(ls)` substitution case via the streak, which the
+streak was partly written for — so it wants its own decision rather than riding
+along with another PR.
+
+Note this reinforces the entry below: a byte counter does not care what a tool *is*,
+so gating on output volume sidesteps the misclassification entirely rather than
+patching it.
+
 ### Gate on bytes, not on call count
 
 The hard-block tier counts *calls* (streak 4, aggregate 15) while the hook already
