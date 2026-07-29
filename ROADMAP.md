@@ -49,10 +49,12 @@ useful artifact:
 
 - ~~**Model inheritance.** A relay child takes the parent's model, so an Opus parent
   silently makes an Opus child.~~ **DISPROVEN 2026-07-29, on two separate counts.**
-  There is no inheritance: a child launched without `--model` gets the *configured
-  default* (`settings.json` → `model: "opus[1m]"`), which coincides with the parent's
-  only because the parent is also on the default — and the human picks the model per
-  child, sometimes leaving one on Opus deliberately. More decisively, **the behaviour
+  There is no inheritance: a child launched without `--model` gets whatever
+  `settings.json` currently sets as the default, which coincides with the parent's only
+  because the parent is also on the default — and the human picks the model per child,
+  sometimes leaving one on Opus deliberately. (Deliberately stated as a mechanism rather
+  than a value: that key read `opus[1m]` when this was written on 2026-07-29 and read
+  `sonnet` a few hours later. A quoted default is a dated claim; the mechanism is not.) More decisively, **the behaviour
   the layer worried about never occurred**: all 29 dispatches in the child's transcript
   carried an explicit model and every one was strictly below Opus (18× haiku, 11×
   sonnet, **zero same-tier**). The relative discipline — delegate downward from
