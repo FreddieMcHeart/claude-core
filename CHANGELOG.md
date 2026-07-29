@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.11.2 (2026-07-29)
+
+### Bug Fixes
+
+- Address review — correct comment, assert on emitted messages not parse errors
+  ([`05103c2`](https://github.com/FreddieMcHeart/claude-core/commit/05103c2d2d4d1f8f7003b0f95dc3a887688e5d6a))
+
+- **hooks**: Reset edit-loop counter on re-edit; correct model-cache docstrings
+  ([`c2685aa`](https://github.com/FreddieMcHeart/claude-core/commit/c2685aa6724e31543a722f0a08d3911a601d53fb))
+
+### Chores
+
+- **hook**: Add a temporary payload-shape probe for sub-agent detection
+  ([`7df0988`](https://github.com/FreddieMcHeart/claude-core/commit/7df0988fcca181830ee75284bbafb60a1e55b951))
+
+### Documentation
+
+- Correct the relay-child analysis from the transcript, and close the reader gap
+  ([`8cdc506`](https://github.com/FreddieMcHeart/claude-core/commit/8cdc506b3898e299295abcd894acca8a4f2f5434))
+
+- **models-router**: Narrow the effort-verification caveat to stage 2
+  ([`6313772`](https://github.com/FreddieMcHeart/claude-core/commit/631377267525696a86cf93fb5cf930a950f42bfc))
+
+- **models-router**: Stage 2 contradicts the screen — the 1.89x does not transfer
+  ([`5e2ceba`](https://github.com/FreddieMcHeart/claude-core/commit/5e2ceba2bd9095e28378c6622db025276ee934ad))
+
+- **roadmap**: Record the token-residency findings and retire the model-inheritance layer
+  ([`2ad0fa8`](https://github.com/FreddieMcHeart/claude-core/commit/2ad0fa80f23b44e6d121d6b91af8e96c73bc9f86))
+
+- **roadmap**: State the child-model mechanism instead of quoting a default that moved
+  ([`d1e6610`](https://github.com/FreddieMcHeart/claude-core/commit/d1e6610ac7864feb226418c53782f783ab3c2f66))
+
+
 ## v0.11.1 (2026-07-27)
 
 ### Bug Fixes
