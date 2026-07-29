@@ -23,6 +23,26 @@ These are universally verbose and universally summary-worthy. Never run them in 
 - Any `Grep` expected to return >50 lines — narrow first, or delegate
 - Sequential diagnostic queries (`bq query`, `gcloud ... list`, `aws ... describe`, `kubectl get ... -o yaml`) where the goal is a summary, not raw rows — delegate and ask for a summary table
 
+### When the rule says delegate but no reader exists
+
+The list above names **tools**, not agents, and the reader fleet does not cover every tool.
+When nothing in `~/.claude/agents/` fits the tool in front of you, the fallback is a
+general-purpose Haiku/Sonnet scout carrying the same read-only framing — **never main**.
+The missing reader is a gap to report, not a licence.
+
+Measured 2026-07-27, and it is the reason this subsection exists. A session delegated 12
+GitHub reads to `gh-reader` and 6 Slack reads to `slack-reader`, then made **11 Cloud
+Logging reads inline on an Opus main** — because no `gcloud` reader existed. Every other
+layer was present and working: the bullet above already named `gcloud … list` as
+always-delegate, the relay banner carried the same reflex, and this skill was loaded (19
+references in the transcript). What was missing was the *destination*.
+
+That is the general shape worth carrying: **a remedy that does not exist from where you
+are standing fails silently.** Nothing errors, nothing warns — the agent simply does the
+work itself, and looks compliant while doing it, because it delegated everywhere a
+delegate was available. Check for a reader by capability rather than from memory, and when
+you find none, say so.
+
 ## Always inline — delegation would be wasteful
 
 These are below the break-even, or need raw text in main:
