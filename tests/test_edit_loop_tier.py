@@ -46,10 +46,19 @@ def _chained_state(monkeypatch, **fields):
 
 
 def _fire(capsys, tool, fp):
+    """Run one handle_pre_tool call and return every message it emitted, parsed
+    individually. emit() writes one JSON object + "\\n" per call (confirmed in
+    hooks/cost-discipline.py), so a call that trips both the warn and escalation
+    tiers writes two lines, not one combined document — parsing the whole
+    captured stdout as a single json.loads() would raise on that case instead of
+    letting the assertions below say what actually happened, which is the wrong
+    thing to depend on: it discriminates through output framing rather than the
+    claim under test, and would silently stop discriminating at all if emit()'s
+    framing ever changed to something a single json.loads() could parse."""
     cd.handle_pre_tool({"session_id": "s1", "tool_name": tool,
                         "tool_input": {"file_path": fp}})
-    out = capsys.readouterr().out.strip()
-    return json.loads(out) if out else None
+    out = capsys.readouterr().out
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
 
 
 def test_fresh_edit_resets_the_count_not_just_the_warn_escalate_flags(monkeypatch, capsys):
@@ -88,16 +97,17 @@ def test_resumed_cycle_refires_gradually_instead_of_jumping_to_escalation(monkey
 
     _fire(capsys, "Edit", fp)  # resumes the cycle
 
-    payload = _fire(capsys, "Read", fp)  # first Read of the resumed cycle
+    messages = _fire(capsys, "Read", fp)  # first Read of the resumed cycle
     assert saved["read_after_edit_counts"][fp] == 1, (
         "a resumed cycle's first Read must count as 1, not continue from the "
         "prior cycle's lifetime total"
     )
-    assert payload is None, (
-        "neither tier should fire on a resumed cycle's first Read — the old "
-        "behaviour fired warn AND escalation simultaneously here because the "
-        "stale count (already >= EDIT_LOOP_ESCALATION) satisfied both conditions "
-        "at once"
+    assert messages == [], (
+        "neither tier should fire on a resumed cycle's first Read. The old "
+        "behaviour fired BOTH warn and escalation together on this exact call, "
+        "since L1748 and L1757 are independent ifs (not if/elif) and the stale "
+        "count (already >= EDIT_LOOP_ESCALATION) satisfied both at once — "
+        "asserted on the actual emitted message count, not on a parse error"
     )
     assert fp not in saved["files_warned_for_reread"]
     assert fp not in saved["files_escalated_for_reread"]
@@ -107,7 +117,7 @@ def test_resumed_cycle_still_reaches_warn_and_escalation_tiers_on_its_own_schedu
     """The reset must not disable the detector for a resumed cycle — it should
     just make it earn each tier again on the same schedule as any fresh cycle."""
     fp = "/tmp/x"
-    saved = _chained_state(monkeypatch)
+    _chained_state(monkeypatch)
 
     _fire(capsys, "Edit", fp)
     for _ in range(cd.EDIT_LOOP_ESCALATION):
@@ -117,11 +127,18 @@ def test_resumed_cycle_still_reaches_warn_and_escalation_tiers_on_its_own_schedu
     warned_at = None
     escalated_at = None
     for i in range(1, cd.EDIT_LOOP_ESCALATION + 1):
-        payload = _fire(capsys, "Read", fp)
-        if payload and warned_at is None and fp in saved.get("files_warned_for_reread", []):
-            warned_at = i
-        if payload and escalated_at is None and fp in saved.get("files_escalated_for_reread", []):
-            escalated_at = i
+        messages = _fire(capsys, "Read", fp)
+        assert len(messages) <= 1, (
+            f"read #{i} of the resumed cycle emitted {len(messages)} messages "
+            "at once — once the count resets correctly, the two tiers should "
+            "never both fire on the same gradual read"
+        )
+        for m in messages:
+            text = m["systemMessage"]
+            if "Edit-loop discipline (escalation)" in text:
+                escalated_at = i
+            elif "Edit-loop discipline:" in text:
+                warned_at = i
 
     assert warned_at == cd.EDIT_LOOP_THRESHOLD
     assert escalated_at == cd.EDIT_LOOP_ESCALATION
