@@ -212,8 +212,15 @@ def write_session_pid_marker(session_id):
         pass
 
 
+# In-process memoization only: each hook event is a fresh process (same reason
+# enumerate_repos() below gives up on caching entirely — CR-2), so this dict is
+# reset to None at the start of every invocation and the 60s TTL never actually
+# elapses within one event's lifetime. What it buys: several call sites within a
+# single event read the same settings.json (blocks_enabled, log_fire, and the
+# is_expensive_main_model callers below) — the TTL check dedupes those, it does
+# not persist anything across events.
 _EXPENSIVE_MODEL_CACHE = {"value": None, "name": None, "effort": None, "checked_at": 0.0}
-_EXPENSIVE_MODEL_TTL = 60.0  # seconds
+_EXPENSIVE_MODEL_TTL = 60.0  # seconds — intra-invocation dedupe window, not cross-event
 
 _KNOWN_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
@@ -294,7 +301,12 @@ def _refresh_model_cache():
 
 
 def is_expensive_main_model():
-    """True iff settings.json main model is Opus. Cached for 60s."""
+    """True iff settings.json main model is Opus.
+
+    Memoized within this invocation only, not across hook events — see the
+    comment on _EXPENSIVE_MODEL_CACHE above for why the 60s TTL never actually
+    elapses in practice.
+    """
     _refresh_model_cache()
     return _EXPENSIVE_MODEL_CACHE["value"]
 
@@ -309,7 +321,9 @@ def get_main_model_name():
 
 def get_main_effort_level():
     """Reasoning effort from the USER settings.json `effortLevel`:
-    low|medium|high|xhigh|max, or unset|unknown. Cached for 60s with the model.
+    low|medium|high|xhigh|max, or unset|unknown. Memoized with the model within
+    this invocation only — see is_expensive_main_model for why "60s" never
+    actually elapses across hook events.
 
     Reads ~/.claude/settings.json only. A project `.claude/settings.json` or
     `settings.local.json` takes precedence over it, so this is the user-level
@@ -1768,7 +1782,15 @@ def handle_pre_tool(payload):
         fp = tool_input.get("file_path")
         if fp and fp not in state["files_edited"]:
             state["files_edited"].append(fp)
-        # New edit on this file — re-warn / re-escalate allowed if cycle resumes
+        # New edit on this file — re-warn / re-escalate allowed if cycle resumes.
+        # The count itself must reset too, not just these membership lists: the
+        # two tiers below are independent ifs, not if/elif, so a fresh Edit that
+        # only cleared the flags but left read_after_edit_counts intact meant a
+        # resumed cycle's first Read was already at or above EDIT_LOOP_ESCALATION
+        # — satisfying BOTH thresholds at once and firing warn AND escalation
+        # together on that single Read, instead of "re-firing" gradually the way
+        # a fresh cycle does.
+        state.setdefault("read_after_edit_counts", {}).pop(fp, None)
         if fp in state["files_warned_for_reread"]:
             state["files_warned_for_reread"].remove(fp)
         if fp in state.setdefault("files_escalated_for_reread", []):
