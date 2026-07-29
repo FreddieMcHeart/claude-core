@@ -478,7 +478,8 @@ def load_state(session_id):
 def new_state(session_id):
     return {
         "session_id": session_id,
-        "aggregate_reads": 0,
+        "aggregate_reads": 0,    # flat, session-wide, ledger-owned — see _agent_scope
+        "agent_counters": {},    # per-scope {"read_streak", "agent_reads", "warnings_fired"}
         "recent_tools": [],
         "files_edited": [],
         "files_warned_for_reread": [],
@@ -502,7 +503,6 @@ def new_state(session_id):
         "cwd": None,             # cost-ledger: working dir, captured at session start
         "started_at": None,      # cost-ledger: ISO8601, captured at session start
         "reader_violations": {},  # I4: per-family inline-read violation count (post-first-fire)
-        "read_streak": 0,         # consecutive read-only tool calls (hard-block tier, 2026-06-27)
         "last_router_call": -999, # tool_calls_total index when models-router Skill last ran
         "prompts_seen": 0,        # UserPromptSubmit count; throttles the harness-hygiene pulse
     }
@@ -613,7 +613,50 @@ def emit_block(reason):
 
 
 # ---- Hard-block gating + forbidden-Bash-read detection (2026-06-27 self-audit) ----
-def blocks_enabled():
+def is_subagent_call(payload):
+    """True iff THIS tool-call payload was made by an Agent-tool sub-agent, not
+    the session's main agent.
+
+    A different question from detect_session_mode(), which asks "is this
+    process a background job?" for its own 3 call sites — do not merge the
+    two (see blocks_enabled below for why this predicate exists as a sibling,
+    not a replacement).
+
+    Signal: `agent_type` is present on sub-agent dispatch payloads and absent
+    on main-agent payloads. Measured via a temporary payload-shape probe
+    (2026-07-28..30, deleted alongside this fix): 513/1358 real pre-tool
+    records carried it across 6 distinct agent_type values seen in the wild
+    (general-purpose/diagram-verifier/gcloud-reader/gh-reader/slack-reader/
+    diagram-vision-reviewer), and zero of 227 control events (user-prompt-
+    submit/session-start/post-compact) ever did. `agent_id` always co-occurs
+    with it — see _agent_scope, which uses that field for a different purpose.
+
+    Absent agent_type means "not a sub-agent call", whether that's a genuine
+    main-agent call or, in principle, a malformed payload — both fail toward
+    the same non-exempt branch. handle_pre_tool already returns before this is
+    ever consulted if session_id is missing, so a payload that reaches here
+    parsed well enough to have one; there is no realistic "truly unknown" case
+    left to fail differently for. Stated choice, not a silent fallthrough.
+    """
+    return bool(payload.get("agent_type"))
+
+
+def _agent_scope(payload):
+    """Which per-agent counter bucket this call's read/streak state belongs to.
+
+    A different question from is_subagent_call: that asks "is this a sub-agent
+    call at all" (for the block-tier exemption below); this asks "whose
+    counter" (so a sub-agent's reads don't move its dispatcher's, and vice
+    versa). A dispatched sub-agent shares its dispatcher's session_id —
+    confirmed via the same probe — so the shared on-disk state file needs a
+    second key to tell them apart. `agent_id` is present exactly when
+    `agent_type` is, so "main" (the dispatcher's own bucket) is exactly the
+    is_subagent_call()==False population.
+    """
+    return payload.get("agent_id") or "main"
+
+
+def blocks_enabled(payload):
     """Hard blocks are gated three ways, all fail-safe toward NOT blocking:
       1. env kill-switch CC_DISCIPLINE_BLOCK=0 → advisory-only. DELIBERATELY NOT
          ADVERTISED in the block messages any more (2026-07-27): a blocked agent
@@ -622,20 +665,25 @@ def blocks_enabled():
          were prose. The switch still works and is documented here and in README
          for a human who wants it — the change is who finds it, not whether it
          exists. Do not re-add it to an emit_block string;
-      2. agent/background-job sessions are exempt — reader/scout sub-agents are
+      2. Agent-tool sub-agent calls are exempt — reader/scout sub-agents are
          SUPPOSED to read in bulk, and the hook can't tell a scout's reads from a
          main-agent inline streak, so it errs toward not blocking them (blocking a
-         scout would break the very delegation pattern this hook encourages);
+         scout would break the very delegation pattern this hook encourages).
+         Uses is_subagent_call(payload), NOT detect_session_mode(): the latter
+         keys on $CLAUDE_JOB_DIR (background-job — a DIFFERENT population) and
+         so exempted background MAINS instead of the foreground sub-agents this
+         was written for. Measured and fixed 2026-07-30 — background mains are
+         no longer exempt as of this change; see the PR for the blast-radius
+         note (one measured session made ~2,150 calls under the old exemption);
       3. a cheap haiku main is warn-only.
     Note this intentionally INCLUDES sonnet (unlike is_expensive_main_model, which
     is opus/fable-only): the audit's worst inline-read offenders were sonnet relay
     children, and the block targets delegation waste, which applies to sonnet too.
     The audit found warnings ignored 82-88%; this tier gives the worst offenders
-    teeth while staying instantly reversible. Conservative v1 — revisit child/agent
-    blocking once hook-firing semantics inside sub-agents are confirmed."""
+    teeth while staying instantly reversible."""
     if os.environ.get("CC_DISCIPLINE_BLOCK", "1") == "0":
         return False
-    if detect_session_mode() == "agent":
+    if is_subagent_call(payload):
         return False
     return get_main_model_name() != "haiku"
 
@@ -1414,7 +1462,7 @@ def handle_pre_tool(payload):
     # (unambiguous, should be Read); ls/find substitutes get a nudge (fuzzier).
     if tool_name == "Bash":
         _bcmd = (tool_input.get("command") or "").strip()
-        if blocks_enabled() and is_cat_as_read(_bcmd):
+        if blocks_enabled(payload) and is_cat_as_read(_bcmd):
             save_state(state)
             log_fire("block_cat_as_read", session_id, "block", command=_bcmd[:120])
             emit_block(
@@ -1474,15 +1522,32 @@ def handle_pre_tool(payload):
         # 2026-07-27: 40 -> 41 across two refused attempts). Refusing without
         # counting holds the reported number still while blocked, so the only way
         # the number moves is a call that actually read something.
+        # Scoped per-agent (2026-07-30): a dispatched sub-agent shares its
+        # dispatcher's session_id, so without a second key its reads land on
+        # whichever scope last wrote the shared state file. `agent_reads` here
+        # is deliberately NOT `aggregate_reads` — that flat, unscoped field
+        # stays session-wide for the cost ledger (build_cost_ledger reads it
+        # directly), and a sub-agent's reads legitimately belong in that
+        # session total even though they must NOT move its dispatcher's own
+        # block-tier counter. `warnings_fired` below is scoped the same way,
+        # so the once-per-threshold warn isn't silently claimed by whichever
+        # scope crosses it first — but fire_once() isn't reused for these
+        # three, because its `key` also names the log_fire() event type, and
+        # scope-qualifying that would fragment cross-session aggregation of
+        # "how often does aggregate_15 fire" into one row per agent_id.
+        _scope = _agent_scope(payload)
+        _scoped = state.setdefault("agent_counters", {}).setdefault(
+            _scope, {"read_streak": 0, "agent_reads": 0, "warnings_fired": []})
         _aggregate = state["aggregate_reads"] + 1
-        _streak = state.get("read_streak", 0) + 1
+        _agent_reads = _scoped["agent_reads"] + 1
+        _streak = _scoped.get("read_streak", 0) + 1
 
         # ---- Hard-block tier (2026-06-27 self-audit) — short-circuits before the warns ----
-        if blocks_enabled() and (
+        if blocks_enabled(payload) and (
                 _streak >= STREAK_BLOCK_THRESHOLD
-                or _aggregate >= AGGREGATE_BLOCK_THRESHOLD):
+                or _agent_reads >= AGGREGATE_BLOCK_THRESHOLD):
             _streaky = _streak >= STREAK_BLOCK_THRESHOLD
-            _n = _streak if _streaky else _aggregate
+            _n = _streak if _streaky else _agent_reads
             save_state(state)  # earlier mutations only — the counters stay deliberately unchanged
             log_fire("block_read_streak" if _streaky else "block_aggregate_reads",
                      session_id, "block", count=_n, tool_name=tool_name)
@@ -1513,31 +1578,49 @@ def handle_pre_tool(payload):
             return
 
         state["aggregate_reads"] = _aggregate
-        state["read_streak"] = _streak
+        _scoped["agent_reads"] = _agent_reads
+        _scoped["read_streak"] = _streak
         state["recent_tools"].append(tool_name)
         state["recent_tools"] = state["recent_tools"][-5:]
 
-        if state["aggregate_reads"] == AGGREGATE_THRESHOLD:
-            fire_once(state, "aggregate_15",
+        _scoped_fired = _scoped.setdefault("warnings_fired", [])
+        if _scoped["agent_reads"] == AGGREGATE_THRESHOLD and "aggregate_15" not in _scoped_fired:
+            _scoped_fired.append("aggregate_15")
+            emit(
                 f"⚠️  Aggregate read discipline: {AGGREGATE_THRESHOLD} inline mechanical tool calls in main this session. "
                 "Per delegation-discipline/references/hard-rules.md, the next reading task must be dispatched to a Haiku scout. "
                 "Counter resets on /clear or successful Agent dispatch.")
-        elif state["aggregate_reads"] >= AGGREGATE_ESCALATION:
-            fire_once(state, "aggregate_25",
-                f"🚨 Aggregate read discipline (escalation): {state['aggregate_reads']} mechanical calls — "
-                f"{state['aggregate_reads'] - AGGREGATE_THRESHOLD} over threshold. "
+            log_fire("aggregate_15", session_id, "warn",
+                     tool_calls_total=state.get("tool_calls_total"),
+                     aggregate_reads=state.get("aggregate_reads"))
+        elif _scoped["agent_reads"] >= AGGREGATE_ESCALATION and "aggregate_25" not in _scoped_fired:
+            _scoped_fired.append("aggregate_25")
+            emit(
+                f"🚨 Aggregate read discipline (escalation): {_scoped['agent_reads']} mechanical calls — "
+                f"{_scoped['agent_reads'] - AGGREGATE_THRESHOLD} over threshold. "
                 "Stop and dispatch a Haiku scout NOW, or run /clear and re-prime from a plan file.")
+            log_fire("aggregate_25", session_id, "warn",
+                     tool_calls_total=state.get("tool_calls_total"),
+                     aggregate_reads=state.get("aggregate_reads"))
 
         # Streak warn tier shares the read_streak counter with the block tier above
         # (single source of truth — no desync between the two consecutive-read measures).
-        if state["read_streak"] >= STREAK_THRESHOLD:
-            fire_once(state, "streak_4",
-                f"⚠️  Streak discipline: {state['read_streak']} consecutive read-only tool calls in main "
+        if _scoped["read_streak"] >= STREAK_THRESHOLD and "streak_4" not in _scoped_fired:
+            _scoped_fired.append("streak_4")
+            emit(
+                f"⚠️  Streak discipline: {_scoped['read_streak']} consecutive read-only tool calls in main "
                 f"({', '.join(state['recent_tools'][-STREAK_THRESHOLD:])}). "
                 "Next action must either write/edit something concrete, or dispatch a Haiku agent.")
+            log_fire("streak_4", session_id, "warn",
+                     tool_calls_total=state.get("tool_calls_total"),
+                     aggregate_reads=state.get("aggregate_reads"))
     else:
-        # any non-read tool resets the streak window
-        state["read_streak"] = 0
+        # any non-read tool resets the streak window for THIS call's scope only —
+        # a dispatcher's Write must not reset a sub-agent's streak, or vice versa.
+        _scope = _agent_scope(payload)
+        state.setdefault("agent_counters", {}).setdefault(
+            _scope, {"read_streak": 0, "agent_reads": 0, "warnings_fired": []}
+        )["read_streak"] = 0
         state["recent_tools"].append(tool_name)
         state["recent_tools"] = state["recent_tools"][-5:]
 
@@ -2007,12 +2090,16 @@ def handle_post_tool(payload):
         return
 
     state["aggregate_reads"] = 0
-    state["read_streak"] = 0
+    # Scoped to the DISPATCHING call's own bucket (see _agent_scope): a
+    # dispatch is something the dispatcher itself does, so this resets the
+    # dispatcher's own counters, not every scope's.
+    _scope = _agent_scope(payload)
+    _scoped = state.setdefault("agent_counters", {}).setdefault(
+        _scope, {"read_streak": 0, "agent_reads": 0, "warnings_fired": []})
+    _scoped["read_streak"] = 0
+    _scoped["agent_reads"] = 0
+    _scoped["warnings_fired"] = []  # allow the aggregate warnings to fire again in the next arc
     state["recent_tools"] = []
-    # Allow the aggregate warnings to fire again in the next arc
-    for key in ("aggregate_15", "aggregate_25", "streak_4"):
-        if key in state["warnings_fired"]:
-            state["warnings_fired"].remove(key)
     save_state(state)
     write_cost_ledger(state)
 
@@ -2064,7 +2151,7 @@ def handle_post_compact(payload):
         return
     state = load_state(session_id)
     state["aggregate_reads"] = 0
-    state["read_streak"] = 0
+    state["agent_counters"] = {}  # whole-session reset: every scope's read/streak state
     state["recent_tools"] = []
     state["mech_bash_on_opus_streak"] = 0  # I5: don't carry a mid-streak across compaction
     state["files_edited"] = []             # I5: edit-loop tracking restarts on fresh context
@@ -2129,113 +2216,6 @@ def handle_post_compact(payload):
     emit(reminder)
 
 
-# ======================================================================
-# TEMPORARY payload probe (2026-07-28) — DELETE THIS BLOCK AND ITS CALL SITE
-# ======================================================================
-# Why it exists. `blocks_enabled()` exempts "agent" sessions, but
-# `detect_session_mode()` keys on $CLAUDE_JOB_DIR — the BACKGROUND-JOB signal —
-# so the exemption lands on background mains and blocks the foreground
-# sub-agents it was written to protect. Fixing that needs a signal that
-# actually identifies an Agent-tool sub-agent, and two prior probes established
-# there is none in the environment visible to a *Bash tool command*.
-#
-# This probe exists because the hook is a DIFFERENT population from that: it is
-# a subprocess the harness spawns directly, not a shell, so its payload and its
-# own environment are a place nobody has looked. Guessing a detector instead of
-# measuring one is how a detector gets built on an assumption — which is the
-# failure this file already has a wiki page about.
-#
-# It records SHAPE, not data. `tool_input`/`tool_response` carry file contents,
-# command strings and plausibly secrets, so under those subtrees only key paths
-# and value types are written, never a value. Environment VARIABLE NAMES are
-# recorded in full and values never are — and the names are deliberately NOT
-# filtered to a `CLAUDE_`/`CC_` prefix, because filtering to where you expect
-# the answer is exactly how the last two probes missed.
-#
-# Off unless explicitly switched on, by either of two routes:
-#   * env  CC_PAYLOAD_PROBE=/path/to/probe.jsonl   (set before launching Claude)
-#   * file /tmp/cc-payload-probe.path containing that path
-# The file route is not redundant. A hook process inherits its environment when
-# Claude Code launches, so a mid-session `export` never reaches it — and the
-# session we most want to probe is one already running.
-PAYLOAD_PROBE_MARKER = Path("/tmp/cc-payload-probe.path")
-PAYLOAD_PROBE_MAX_VALUE = 120   # scalars longer than this are truncated
-PAYLOAD_PROBE_MAX_KEYS = 400    # bound on one record; REPORTED when hit, not silent
-PAYLOAD_PROBE_MAX_DEPTH = 12
-# Subtrees whose values are never written — only their key paths and types.
-PAYLOAD_PROBE_OPAQUE = frozenset({"tool_input", "tool_response", "prompt", "content"})
-_PROBE_SECRETY = re.compile(r"key|token|secret|password|passwd|auth|credential", re.I)
-
-
-def _probe_target():
-    """Path to append to, or None when the probe is switched off."""
-    raw = (os.environ.get("CC_PAYLOAD_PROBE") or "").strip()
-    if not raw:
-        try:
-            raw = PAYLOAD_PROBE_MARKER.read_text().strip()
-        except Exception:
-            return None
-    return raw or None
-
-
-def _probe_walk(node, path, out, opaque, depth=0):
-    """Map every key path to a type, and to a value only where that is safe.
-
-    `opaque` latches ON as soon as any ancestor is an opaque key and never
-    turns back off, so a nested value cannot escape redaction by sitting deeper
-    than the subtree root.
-    """
-    if len(out) >= PAYLOAD_PROBE_MAX_KEYS or depth > PAYLOAD_PROBE_MAX_DEPTH:
-        return
-    if isinstance(node, dict):
-        if path:
-            out[path] = f"dict({len(node)})"
-        for key in sorted(node, key=str):
-            child = f"{path}.{key}" if path else str(key)
-            _probe_walk(node[key], child, out,
-                        opaque or str(key) in PAYLOAD_PROBE_OPAQUE, depth + 1)
-        return
-    if isinstance(node, list):
-        out[path] = f"list({len(node)})"
-        if node:   # first element only — enough to learn the shape, and bounded
-            _probe_walk(node[0], f"{path}[0]", out, opaque, depth + 1)
-        return
-    kind = type(node).__name__
-    if opaque or _PROBE_SECRETY.search(path):
-        out[path] = kind
-        return
-    text = str(node)
-    if len(text) > PAYLOAD_PROBE_MAX_VALUE:
-        text = text[:PAYLOAD_PROBE_MAX_VALUE] + "…"
-    out[path] = f"{kind}={text}"
-
-
-def probe_payload(mode, payload):
-    """Append one shape record per hook invocation. No-op unless switched on."""
-    target = _probe_target()
-    if target is None:
-        return
-    try:
-        shape = {}
-        _probe_walk(payload, "", shape, opaque=False)
-        record = {
-            "ts": time.time(),
-            "mode": mode,
-            "pid": os.getpid(),
-            "ppid": os.getppid(),     # a sub-agent's hook may hang off a different parent
-            "truncated": len(shape) >= PAYLOAD_PROBE_MAX_KEYS,
-            "shape": shape,
-            "env_names": sorted(os.environ),   # NAMES ONLY — never values
-        }
-        with open(target, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except Exception:
-        pass   # a probe must never break the hook it is measuring
-# ======================================================================
-# END TEMPORARY payload probe
-# ======================================================================
-
-
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -2243,8 +2223,6 @@ def main():
         payload = json.loads(raw) if raw.strip() else {}
     except Exception:
         payload = {}
-
-    probe_payload(mode, payload)   # TEMPORARY — delete with the probe block above
 
     try:
         if mode == "pre-tool":
