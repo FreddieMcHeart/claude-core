@@ -2,6 +2,38 @@
 
 <!-- version list -->
 
+## v0.11.6 (2026-07-30)
+
+### Bug Fixes
+
+- **doctor**: The wiki mirror check passed on a two-commit-behind mirror
+  ([#41](https://github.com/FreddieMcHeart/claude-core/pull/41),
+  [`0aa6d09`](https://github.com/FreddieMcHeart/claude-core/commit/0aa6d093217049b080e7b58d9ead95cadec47962))
+
+### Documentation
+
+- **roadmap**: An instrument that records it RAN does not record that its result ARRIVED
+  ([`f72dda2`](https://github.com/FreddieMcHeart/claude-core/commit/f72dda2592583613627e38442b14de8277c6eb9a))
+
+- **roadmap**: File the plugin-drift detector, and the block that fired on a merge
+  ([`fc4adf1`](https://github.com/FreddieMcHeart/claude-core/commit/fc4adf1861999f24b325568cc3ef18171d70a9b7))
+
+- **roadmap**: Settle the gauge design, and record why it lands after agent detection
+  ([`fa879af`](https://github.com/FreddieMcHeart/claude-core/commit/fa879afa4501a01282184f4459c3cb0e17005ba3))
+
+- **roadmap**: The aggregate tier makes the relay unreachable, and a new remedy shape
+  ([`f9792f6`](https://github.com/FreddieMcHeart/claude-core/commit/f9792f699e5a6a597e62b87984b7e1c328cbeb6e))
+
+- **roadmap**: The misclassified population is every CLI write, not merges
+  ([`4d562d5`](https://github.com/FreddieMcHeart/claude-core/commit/4d562d582763a6d220a0406802a9e06ae4cf34f3))
+
+- **roadmap**: The read-block fired a second time, on the next merge
+  ([`6a7f884`](https://github.com/FreddieMcHeart/claude-core/commit/6a7f884b7048657d1b63a4818f84bd5c68556380))
+
+- **roadmap**: The statusline HUD and the guard now measure different numbers
+  ([`e7db8f7`](https://github.com/FreddieMcHeart/claude-core/commit/e7db8f708907925a8d94212dc25d56e004710388))
+
+
 ## v0.11.5 (2026-07-30)
 
 ### Bug Fixes
