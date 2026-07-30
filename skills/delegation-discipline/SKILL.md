@@ -105,7 +105,20 @@ If a Haiku sub-agent returns shallow/incomplete output, escalate the model **and
 - `references/scout-first.md` — sub-agent prompt construction + the scout-first procedure
 - `references/workflow-authoring.md` — cost-discipline scaffold for Workflow scripts (gate/prime/budget-cap/backflow). MUST be consulted before ANY Workflow tool call — curated or improvised (ultracode).
 
-Rationale, audit numbers, and cost data: see `README.md` in the package root.
+Rationale, audit numbers, and cost data: the measurements live in the wiki, not in this
+package — `docs/core/brain/claude-core/fan-out-cost-is-prefix-not-output-2026-07-27` (why
+fan-out spend is ~73% prefix rather than output) and
+`docs/core/brain/claude-core/measuring-interventions-controlled-ab-2026-07-20` (the
+controlled A/B behind the routing numbers, including why a sub-agent screen is biased
+toward the cheaper tier).
+
+This sentence previously pointed at a `README.md` in the package root. That file **never
+existed** — `git log --diff-filter=ADR` over the path returns nothing across the whole
+history. Its twin in `models-router/SKILL.md` was fixed first and this one was reported
+clean by mistake: the two sentences are worded differently (`cost data` here, `model
+pricing` there), so a grep for one misses the other, and a `tail -4` misses this one
+because it sits mid-file. Two near-identical defects with non-identical text is why the
+second survived the fix for the first.
 
 ## Related skills
 
