@@ -135,7 +135,14 @@ elif ! git -C "$WIKI_DIR" rev-parse --verify -q origin/main >/dev/null 2>&1; the
 else
     _wiki_behind="$(git -C "$WIKI_DIR" rev-list --count HEAD..origin/main 2>/dev/null)"
     case "$_wiki_behind" in (''|*[!0-9]*) _wiki_behind="" ;; esac
-    _wiki_fetch_head="$(git -C "$WIKI_DIR" rev-parse --git-path FETCH_HEAD 2>/dev/null)"
+    # --git-path prints a path RELATIVE to the repo while this test runs from the
+    # caller's cwd. On the submodule layout .git was a pointer file and git returned
+    # an absolute path, so the mistake was invisible; on a plain clone or a symlinked
+    # mount it returns .git/FETCH_HEAD and resolves against the wrong directory,
+    # reporting a wiki fetched minutes ago as stale for a week. One layout was never
+    # enough to exercise this.
+    _wiki_git_dir="$(git -C "$WIKI_DIR" rev-parse --absolute-git-dir 2>/dev/null)"
+    _wiki_fetch_head="${_wiki_git_dir:-/nonexistent}/FETCH_HEAD"
     if [ -z "$_wiki_behind" ]; then
         _warn "wiki:docs/core" "could not count commits behind origin/main"
     elif [ "$_wiki_behind" -gt 0 ]; then

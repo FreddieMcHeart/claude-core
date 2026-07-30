@@ -91,8 +91,18 @@ WIKI_URL="$WIKI_URL_OVERRIDE"
 if [ -z "$WIKI_URL" ] && [ -f "$CLAUDE_DIR/lib/config_loader.py" ]; then
     WIKI_URL="$(python3 "$CLAUDE_DIR/lib/config_loader.py" wiki_url 2>/dev/null || true)"
 fi
-if [ -d "$CORE_DIR/docs/core" ] && git -C "$CORE_DIR" submodule status docs/core >/dev/null 2>&1; then
-    echo "✓ docs/core submodule already present — leaving"
+# "Already mounted?" cannot be asked of `git submodule status`. /.gitmodules is
+# git-ignored here on purpose — the wiki URL is personal and stays out of the public
+# repo — so the registration is local-only and is lost whenever it is not carried
+# over, after which this guard falls through and runs `submodule add -f` over a
+# directory that already exists. Measured 2026-07-30: status errored on a mount that
+# had been in use for weeks. Ask the filesystem instead — anything that is a
+# populated git checkout at that path is mounted, whether it is a submodule, a plain
+# clone, or a symlink to the working copy.
+if [ -e "$CORE_DIR/docs/core" ] \
+   && [ -n "$(ls -A "$CORE_DIR/docs/core" 2>/dev/null)" ] \
+   && git -C "$CORE_DIR/docs/core" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "✓ wiki already mounted at docs/core — leaving"
 elif [ -z "$WIKI_URL" ]; then
     echo "FATAL: wiki_url not set. Pass --wiki-url <ssh-url> or set wiki_url in $CLAUDE_DIR/platform.config.toml" >&2
     exit 1
