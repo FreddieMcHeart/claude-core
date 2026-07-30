@@ -232,7 +232,20 @@ is the strongest available argument for byte-gating: no plausible read/write cla
 would have to be argued about, because bytes returned by `gh pr merge` are near zero
 while bytes returned by a wide `grep` are not.
 
-Two side observations from that refusal, both worth keeping:
+**It then fired a second time, ~40 minutes later, on the same command shape** —
+`git checkout main && gh pr merge 36`, the merge of the very PR that files this
+observation. Two refusals of a merge in one session promotes this from an anecdote to a
+reproduction: it is not a rare coincidence of counter position, it is what happens
+whenever a session lands PRs, because landing a PR is a run of `gh`/`git` calls and every
+one of them is counted as a read. The measure and the behaviour it is meant to discourage
+have no relationship on this path.
+
+Worth stating plainly, since it is the cost this entry is arguing about: the streak tier
+currently **taxes the highest-value ten calls a session makes** — reviewing, verifying,
+and landing work — at exactly the moment when interrupting is most expensive, and it does
+so on the basis of a number that measured none of it.
+
+Two side observations from the first refusal, both worth keeping:
 
 - **Remedy (a) was unavailable for a reason outside the hook.** The message offers
   "dispatch a Haiku reader", but this session runs under a standing instruction not to
