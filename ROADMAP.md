@@ -224,6 +224,63 @@ mitigated. If the byte counter lands, drop the drop-Bash-from-the-streak proposa
 instead of leaving a live plan pointing at the old metric. Recorded explicitly
 because a superseded proposal left standing reads exactly like an open one.
 
+**It fired live on 2026-07-30, on a merge.** The streak block refused
+`git checkout main && gh pr merge 35` at ten consecutive calls — a *write* operation,
+refused as inline reading, in the middle of landing the very PRs that repair this file.
+So the entry now has a first-hand instance and not only a reported one, and the instance
+is the strongest available argument for byte-gating: no plausible read/write classifier
+would have to be argued about, because bytes returned by `gh pr merge` are near zero
+while bytes returned by a wide `grep` are not.
+
+Two side observations from that refusal, both worth keeping:
+
+- **Remedy (a) was unavailable for a reason outside the hook.** The message offers
+  "dispatch a Haiku reader", but this session runs under a standing instruction not to
+  dispatch agents unless the user asked. So the printed remedy set was, in practice, one
+  item shorter than it looked. A guard cannot know the caller's standing constraints —
+  which is an argument for every printed remedy being independently sufficient, not for
+  the hook trying to detect them.
+- **Remedy (b) is unreachable for any write that needs a read first.** "Write/edit
+  something concrete" was the remedy taken, but the edit actually wanted was to *this
+  file*, and `Edit` requires a prior `Read` that the block itself refuses. The way out
+  was to write a NEW file — which happened to be genuinely owed work rather than
+  make-work, by luck. Same family as the page
+  `docs/core/brain/claude-core/the-remedy-inside-the-trap-2026-07-27` records: a remedy
+  is only reachable if it needs nothing the blocked state denies.
+
+### Nothing compares the installed plugin version to the repository
+
+Raised 2026-07-30, third recurrence of the same drift. The repository reached 0.11.5
+while `installed_plugins.json` still read 0.11.2 — stale by three releases, including
+the per-agent-scoping fix reviewed and merged an hour earlier.
+
+The wiki page for this
+(`docs/core/brain/claude-core/partial-staleness-reads-as-fresh-2026-07-28`) already
+prescribes the fix in words: *compare the install paths on a schedule, not on suspicion
+— the whole problem is that suspicion never arrives.* Nothing implements it. The
+comparison has run exactly as often as a human has wondered, which is three times, each
+time after the drift had already misled someone.
+
+**Why it recurs rather than sits still:** every `fix:` merge cuts a release, so the gap
+widens once per merge — fastest during the sessions actively repairing the hook, whose
+authors are most confident their changes are live. On 2026-07-30 a block fired and was
+read as evidence the new scoped counters worked; it came from 0.11.2's flat counter.
+
+Proposed shape, deliberately small: in the harness-hygiene pulse, read the authoritative
+version from `installed_plugins.json` and compare it to the repository's `pyproject.toml`
+version. Nudge on mismatch, naming both numbers. Constraints that matter:
+
+- **Resolve from the record that owns the answer**, never a directory listing — three
+  versions coexist in the cache and the listing order is lexical, so every positional
+  selector over it is wrong (`0.11.1 0.11.2 0.2.0`: the active one is in the middle).
+- **"Could not look" is a distinct outcome from "in sync"** — absent manifest, absent
+  repo, unparsable JSON. Log the outcome even when silent, same as the wiki-index check,
+  or a check that never ran is indistinguishable from one that found nothing.
+- **`claude plugin update` reports "restart required to apply"**, so there are three
+  states, not two: repository, on-disk copy, and the copy the running process serves. A
+  detector can honestly compare the first two; it cannot claim the third. Say which one
+  it checked, in the nudge text.
+
 ### Shape a Bash command to return the ANSWER, not the material
 
 Raised 2026-07-30 from a real call. Three separate defects in one command, which is
