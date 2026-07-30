@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.11.8 (2026-07-30)
+
+### Bug Fixes
+
+- **doctor,install**: The wiki mount check depended on the caller's cwd
+  ([#43](https://github.com/FreddieMcHeart/claude-core/pull/43),
+  [`dc8c0b0`](https://github.com/FreddieMcHeart/claude-core/commit/dc8c0b046f875ef4a8a5af97441a0e6482a6b7e1))
+
+### Documentation
+
+- **roadmap**: The plugin update command reported a success about the wrong source
+  ([`b644fe8`](https://github.com/FreddieMcHeart/claude-core/commit/b644fe81701563733b4a4ec7d807d9a448b44470))
+
+
 ## v0.11.7 (2026-07-30)
 
 ### Bug Fixes
