@@ -3,6 +3,7 @@
 # Usage:
 #   ./doctor.sh
 #   CLAUDE_DIR=/custom ./doctor.sh   — check against a non-default target dir
+#   CORE_DIR=/path ./doctor.sh       — check a different claude-core checkout
 set -uo pipefail
 
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
@@ -90,7 +91,7 @@ else
 fi
 
 # ── 5. cost-discipline hook registered — via new plugin OR legacy hand-merge ──
-CORE_DIR="$(cd "$(dirname "$0")" && pwd)"
+CORE_DIR="${CORE_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 _legacy_cost_discipline_present() {
     [ -f "$CLAUDE_DIR/settings.json" ] || return 1
     python3 -c "
@@ -116,11 +117,36 @@ else
     _warn "hook:cost-discipline" "not registered — run: claude plugin marketplace add $CORE_DIR && claude plugin install claude-core-hooks@claude-core-local"
 fi
 
-# ── 6. docs/core wiki submodule resolves ─────────────────────────────────────
-if [ -d "$CORE_DIR/docs/core" ] && [ -n "$(ls -A "$CORE_DIR/docs/core" 2>/dev/null)" ]; then
-    _pass "wiki:docs/core submodule"
+# ── 6. docs/core wiki mirror is present AND current ───────────────────────────
+# Not a submodule, despite the name this check carried: claude-core declares no
+# .gitmodules and .gitignore excludes /docs/core. It is a plain clone of the wiki
+# remote, mounted read-only, and nothing pulls it automatically — the project
+# CLAUDE.md makes that a manual last step of every wiki edit, which is exactly the
+# kind of step that gets skipped. So the failure mode here is not "missing", it is
+# "present and out of date", and a non-emptiness test passes that with a green
+# line. Measured 2026-07-30: the mirror was two commits behind and this said PASS.
+WIKI_DIR="$CORE_DIR/docs/core"
+if [ ! -d "$WIKI_DIR" ] || [ -z "$(ls -A "$WIKI_DIR" 2>/dev/null)" ]; then
+    _warn "wiki:docs/core" "missing or empty — run ./install.sh (needs wiki_url)"
+elif ! git -C "$WIKI_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    _warn "wiki:docs/core" "present but not a git checkout — currency cannot be established"
+elif ! git -C "$WIKI_DIR" rev-parse --verify -q origin/main >/dev/null 2>&1; then
+    _warn "wiki:docs/core" "no origin/main ref — presence is all this check can establish"
 else
-    _warn "wiki:docs/core" "submodule missing or empty — run ./install.sh (needs wiki_url)"
+    _wiki_behind="$(git -C "$WIKI_DIR" rev-list --count HEAD..origin/main 2>/dev/null)"
+    case "$_wiki_behind" in (''|*[!0-9]*) _wiki_behind="" ;; esac
+    _wiki_fetch_head="$(git -C "$WIKI_DIR" rev-parse --git-path FETCH_HEAD 2>/dev/null)"
+    if [ -z "$_wiki_behind" ]; then
+        _warn "wiki:docs/core" "could not count commits behind origin/main"
+    elif [ "$_wiki_behind" -gt 0 ]; then
+        _warn "wiki:docs/core" "$_wiki_behind commit(s) behind origin/main — run: git -C $WIKI_DIR pull origin main"
+    elif [ ! -f "$_wiki_fetch_head" ] || [ -n "$(find "$_wiki_fetch_head" -mtime +7 2>/dev/null)" ]; then
+        # Agreeing with a remote-tracking ref nobody has fetched is two stale things
+        # agreeing. "Could not look" must not be reported as "nothing found".
+        _warn "wiki:docs/core" "matches origin/main, but that ref was last fetched over a week ago — run: git -C $WIKI_DIR fetch origin"
+    else
+        _pass "wiki:docs/core current with origin/main ($(git -C "$WIKI_DIR" rev-parse --short HEAD))"
+    fi
 fi
 
 # ── 7. relay hooks (only if downbeat is installed — CLI today, plugin someday) ─
