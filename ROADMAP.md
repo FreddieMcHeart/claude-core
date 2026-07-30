@@ -433,6 +433,40 @@ it certify the wrong claim.
 
 ### Nothing compares the installed plugin version to the repository
 
+**Fourth occurrence, 2026-07-30, and this one was PREDICTED rather than stumbled into** —
+which is the only reason the next finding surfaced. Merging the ledger fix cut a release, so
+the repository moved to 0.11.7 while the install sat at 0.11.5. Checking deliberately, at
+the moment the drift was known to be created, is what turned a recurring accident into a
+reproducible experiment.
+
+**And the refresh command lied about what it did.** `claude plugin update
+claude-core-hooks@claude-core-local` reported `✔ updated from 0.11.5 to 0.11.6` — a
+success, with a version bump, naming a version that was **one release behind the
+repository**. Verified against the record rather than the message: the installed file's
+sha256 was byte-identical to the 0.11.5 copy checked earlier the same day, and none of the
+markers from the merged change (`_segment_from_state`, `result_bytes_buckets`,
+`dispatches_by_type`) were present.
+
+The mechanism, and it generalises past this CLI: **a `-local` marketplace installs from the
+local checkout, not from the remote.** The command had been run before `git pull`, so
+"update" meant "re-copy whatever is on your disk", and the version it announced came from
+the *stale* `plugin.json` it was copying. A success message that names a version is only as
+fresh as the source it read the version from — so the message cannot be evidence about the
+thing it just installed.
+
+Two rules follow, both cheap:
+
+- **Pull before you update, always** — and treat `update` from a local source as "sync from
+  working copy", not "fetch the latest".
+- **Never accept the update command's own report.** Verify by hashing the installed file
+  against the repository file, and by grepping the installed copy for a marker that only the
+  new version contains. The version string is the weakest available evidence; it is a label
+  the stale source wrote about itself.
+
+This is the same shape as everything else on this page — a report that is true about the
+wrong object — and it is the first instance where the misleading report came from the tool
+whose whole job was to fix the drift.
+
 Raised 2026-07-30, third recurrence of the same drift. The repository reached 0.11.5
 while `installed_plugins.json` still read 0.11.2 — stale by three releases, including
 the per-agent-scoping fix reviewed and merged an hour earlier.
