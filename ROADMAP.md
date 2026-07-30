@@ -439,13 +439,37 @@ the repository moved to 0.11.7 while the install sat at 0.11.5. Checking deliber
 the moment the drift was known to be created, is what turned a recurring accident into a
 reproducible experiment.
 
-**And the refresh command lied about what it did.** `claude plugin update
-claude-core-hooks@claude-core-local` reported `✔ updated from 0.11.5 to 0.11.6` — a
-success, with a version bump, naming a version that was **one release behind the
-repository**. Verified against the record rather than the message: the installed file's
-sha256 was byte-identical to the 0.11.5 copy checked earlier the same day, and none of the
-markers from the merged change (`_segment_from_state`, `result_bytes_buckets`,
-`dispatches_by_type`) were present.
+**CORRECTED 2026-07-30, and the correction matters more than the original claim.** This
+entry first said the refresh command "lied about what it did". **It did not**, and two of
+the three facts offered as evidence were misread. The corrected account:
+
+`claude plugin update claude-core-hooks@claude-core-local` reported `✔ updated from 0.11.5
+to 0.11.6`. That was **true**. The local checkout was at 0.11.6 — a real release, cut from
+a parallel session's merged PR — and the command installed exactly that. It reported the
+version it installed.
+
+Two pieces of "evidence" that were nothing of the kind:
+
+- **"The installed sha256 was byte-identical to the earlier copy, so nothing was
+  installed."** Wrong inference. `hooks/cost-discipline.py` is byte-identical between
+  0.11.5 and 0.11.6 — that release touched `doctor.sh`, `ROADMAP.md`, `CHANGELOG.md` and
+  the two version files, and nothing else. **An unchanged hash across a version bump is
+  evidence that the file did not change, which is the common case — not evidence that an
+  install failed.** To test whether an install took, compare against the version you expect
+  to be installed, never against the previous install.
+- **"It named a version one release behind the repository."** True and irrelevant to the
+  command's honesty: it named the version of the source it was told to install from, which
+  was my checkout, because I had not pulled.
+
+The one piece of evidence that WAS sound: the markers from the change I was looking for
+(`_segment_from_state`, `result_bytes_buckets`, `dispatches_by_type`) were absent. A marker
+drawn from the specific change under test discriminates; a hash comparison against the
+previous install does not.
+
+**So the defect was entirely in my order of operations, and the entry originally blamed the
+tool for it.** That is the second time in one day this page's author mischaracterised a
+correctly-behaving CLI — the first was claiming `register` silently re-homes when it
+refuses carefully. Both times the tool was the easier suspect than the sequence.
 
 The mechanism, and it generalises past this CLI: **a `-local` marketplace installs from the
 local checkout, not from the remote.** The command had been run before `git pull`, so
@@ -458,14 +482,19 @@ Two rules follow, both cheap:
 
 - **Pull before you update, always** — and treat `update` from a local source as "sync from
   working copy", not "fetch the latest".
-- **Never accept the update command's own report.** Verify by hashing the installed file
-  against the repository file, and by grepping the installed copy for a marker that only the
-  new version contains. The version string is the weakest available evidence; it is a label
-  the stale source wrote about itself.
+- **Verify against the version you EXPECT, not against the previous install.** Hash the
+  installed file against the repository file at the ref you meant to install, and grep the
+  installed copy for a marker drawn from the specific change you are looking for. The
+  command's version string is a true statement about its source, which is not the same
+  question as "is the change I want now installed" — and a hash comparison against the
+  *previous* install answers neither, because most releases do not touch most files.
 
-This is the same shape as everything else on this page — a report that is true about the
-wrong object — and it is the first instance where the misleading report came from the tool
-whose whole job was to fix the drift.
+This is the same shape as everything else on this page — **a true report answering a
+different question than the one being asked** — with the twist that here the misreading was
+the reader's, not the reporter's. The tool said what it did; I checked it against the wrong
+baseline and then wrote up the tool. The general form is worth more than the instance: when
+a command's report and your expectation disagree, the sequence you ran is a cheaper suspect
+than the tool, and it is the one you can actually inspect.
 
 Raised 2026-07-30, third recurrence of the same drift. The repository reached 0.11.5
 while `installed_plugins.json` still read 0.11.2 — stale by three releases, including
