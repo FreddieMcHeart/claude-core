@@ -240,6 +240,24 @@ whenever a session lands PRs, because landing a PR is a run of `gh`/`git` calls 
 one of them is counted as a read. The measure and the behaviour it is meant to discourage
 have no relationship on this path.
 
+**Third refusal, same session, and it widens the population beyond `git`/`gh`.** The
+block fired again while the session was doing nothing but *sending* — two `downbeat send`
+relay messages and a final state check. `downbeat send` is a write in every sense that
+matters: it delivers a message to another session, returns a 12-character id, and reads
+nothing. It is counted as a read because it is spelled `Bash`.
+
+So the misclassified population is not "merges" — it is **every write this harness
+performs through a CLI**: `git`, `gh`, `downbeat`, and by extension any future tool that
+is a command rather than a first-class tool. That is most of what a session does when it
+is being productive, and it is exactly the set that a read-discipline counter should be
+blind to.
+
+One further observation, recorded WITHOUT a mechanism because the running copy was
+0.11.2 while `main` was at 0.11.5 and this page's neighbour says not to infer a version
+from behaviour: the streak was **not** reset by an intervening `TaskUpdate`. Whether the
+non-read reset path covers task tools at all is a question for the code, not for this
+observation.
+
 Worth stating plainly, since it is the cost this entry is arguing about: the streak tier
 currently **taxes the highest-value ten calls a session makes** — reviewing, verifying,
 and landing work — at exactly the moment when interrupting is most expensive, and it does
