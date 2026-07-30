@@ -310,6 +310,59 @@ Two side observations from the first refusal, both worth keeping:
   `docs/core/brain/claude-core/the-remedy-inside-the-trap-2026-07-27` records: a remedy
   is only reachable if it needs nothing the blocked state denies.
 
+**Third remedy shape, from the parallel session hitting the same tier independently: the
+remedy set is EMPTY for the state that triggers it most.** Their framing, and it is sharper
+than either of mine:
+
+Of the three exits, **only the write preserves context.** A dispatch is a different
+session's work and a `/clear` destroys the reason you were reading. So the write is the good
+exit — and it is available only when a write is *already* the next thing you were going to
+do. Mid-measurement it is structurally unavailable, because you are reading precisely
+because you must not yet change anything: they were holding stamp fingerprints and fixture
+state, and a write would have invalidated the measurement the reads were serving.
+
+For that state the tier's three remedies reduce to: **destroys context, forbidden, or
+requires you to do the thing the measurement forbids.** Not "the exit is closed" and not
+"the remedy is inert" — the set is empty. And it is empty exactly for the read-heavy
+investigative work that trips a read counter fastest, which is the population the tier is
+aimed at.
+
+They got out only because their next step happened to be a write (planting a fixture), so
+the streak reset for free. That is luck, not a remedy.
+
+### An instrument that records it RAN does not record that its result ARRIVED
+
+Raised 2026-07-30 by the parallel session, from a case that no amount of firing evidence
+could have explained — and it re-scopes the fire-log proposal rather than confirming it.
+
+They established, by planting a fixture and comparing a stamp fingerprint across one
+prompt, that their `UserPromptSubmit` pulse **is registered, loaded, and executing** — the
+stamp carried the fleet fingerprint *including* the fixture and a run timestamp. Valid
+JSON, correct `hookEventName`, a 655-char `additionalContext` naming both fixture paths,
+0.07s against a 5s timeout. And **the nudge never reached their context.**
+
+The discriminator came free from an unrelated `/relay-reply`: a relay message was sitting
+in their inbox **with no banner**. So it is not that hook and not a merge-order problem
+between two `UserPromptSubmit` entries — no `UserPromptSubmit` hook in that session has
+materialised `additionalContext` at all since a known timestamp. The channel accepts the
+payload and drops it.
+
+**The generalisation, which applies to everything we built this week:** a stamp, a fire log
+and a counter all keep working perfectly while the reader hears nothing. Every instrument in
+this repo records that a check *happened*; none records that its result *arrived*. For a
+check whose only product is text in someone's context, "ran" is not the outcome — "was
+read" is. Same landed-vs-live split as repo-versus-installed-versus-running, one layer
+further out.
+
+So the fire-log row for an advisory wants **both** halves: the `session_id` that fired it
+(did it run, and inside which session) **and** whether the payload was non-empty and handed
+off (was there anything to deliver). Neither alone distinguishes healthy silence from a
+severed channel — and a log recording only the first would have answered their question
+with FIRED, closing the item as working while the nudge stayed invisible on every prompt.
+
+Build the fire-log — it answers "did it run" permanently and in one query. Just do not let
+it certify the wrong claim.
+
 ### Nothing compares the installed plugin version to the repository
 
 Raised 2026-07-30, third recurrence of the same drift. The repository reached 0.11.5
