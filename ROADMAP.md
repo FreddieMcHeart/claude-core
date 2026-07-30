@@ -330,6 +330,41 @@ aimed at.
 They got out only because their next step happened to be a write (planting a fixture), so
 the streak reset for free. That is luck, not a remedy.
 
+### The statusline HUD and the guard now measure different numbers
+
+Found 2026-07-30 while checking whether a scout's consumer list was complete. It is my own
+review miss, from the PR that introduced per-agent scoping.
+
+`~/.claude/statusline-hud-wrapper.sh:46-49` reads the working state file directly:
+
+```sh
+disc_file="/tmp/cc-discipline-${session_id}.json"
+reads=$(jq -r '.aggregate_reads // 0' "$disc_file" ...)
+total=$(jq -r '.tool_calls_total // 0' "$disc_file" ...)
+```
+
+…and colours `reads` yellow/red against a threshold of **15** — the aggregate warn
+threshold. But since per-agent scoping landed, the warn and block tiers fire on
+`_scoped["agent_reads"]`, while the HUD still displays the **flat, session-wide**
+`aggregate_reads`. Those are now different counters. So the number the human watches and
+the number that acts on them can disagree, in either direction: the HUD can sit green while
+a scope is one call from a block, or sit red while nothing is close to firing.
+
+**This is the same defect I required to be fixed one layer over and did not think to look
+for here.** The review of the scoping PR insisted the fire log record the counter that
+actually fired rather than the flat total — and then never asked what ELSE displays the flat
+total. Fixing an instrument's log while leaving its dashboard on the old field is a partial
+migration of exactly the kind this page keeps cataloguing.
+
+Work: decide what the HUD should show, rather than mechanically repointing it. Candidates —
+the current scope's `agent_reads` (matches what will block *you*), the max across scopes
+(matches "is anything about to fire"), or both numbers. The flat field is still maintained,
+so nothing is broken today; it is simply no longer the number the guard uses.
+
+Note for whoever picks this up: the statusline is in `claude-harness`, a different repo from
+the hook, with no CI and no test suite. A change there is verified by looking at a running
+statusline, not by a green build.
+
 ### An instrument that records it RAN does not record that its result ARRIVED
 
 Raised 2026-07-30 by the parallel session, from a case that no amount of firing evidence
