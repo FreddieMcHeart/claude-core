@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.11.3 (2026-07-30)
+
+### Bug Fixes
+
+- **models-router**: Repoint the provenance sentence at records that exist
+  ([`c5a1386`](https://github.com/FreddieMcHeart/claude-core/commit/c5a138631e4b3522752cab353df2107f8c0aca81))
+
+### Chores
+
+- Untrack the committed .pyc, and record the Bash-counts-as-read defect
+  ([`4d5f247`](https://github.com/FreddieMcHeart/claude-core/commit/4d5f247a09461feadc09913945b62294b7e4727c))
+
+### Documentation
+
+- Add the cost-discipline.py architecture diagram
+  ([`bf6a080`](https://github.com/FreddieMcHeart/claude-core/commit/bf6a080452718cb574d7fd4028954ef189e562c2))
+
+- **roadmap**: Shape Bash to return the answer; mark the Bash-streak proposal superseded
+  ([`3ae7c09`](https://github.com/FreddieMcHeart/claude-core/commit/3ae7c0946033bd1e05f46660b5ffd75e52f130a8))
+
+
 ## v0.11.2 (2026-07-29)
 
 ### Bug Fixes
