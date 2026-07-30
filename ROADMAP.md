@@ -252,6 +252,37 @@ is a command rather than a first-class tool. That is most of what a session does
 is being productive, and it is exactly the set that a read-discipline counter should be
 blind to.
 
+**Fourth refusal — and the aggregate tier makes the RELAY unreachable.** The block moved
+from the streak tier to the aggregate tier at 40 calls, and the call it refused was
+`downbeat reply` — answering a peer session's message. The relay is a CLI, so it is
+spelled `Bash`, so a session over the aggregate threshold **cannot answer its mail.** The
+channel through which this harness coordinates between sessions is gated by a counter that
+believes coordination is reading.
+
+Observed, not predicted: the refusal was attempted rather than inferred, and it is free to
+attempt because refused calls are no longer counted — the v0.11.1 fix behaving exactly as
+designed, which is what made testing the assumption cost nothing. `Edit` and `Write` are
+NOT in `READ_TOOLS`, so this note could still be written; only the commit and the reply
+could not.
+
+**A new shape in the remedy family, sharper than the two already recorded.** The aggregate
+tier offers exactly two remedies — dispatch, or `/clear` — and for this session:
+
+- **dispatch** was unavailable for a reason outside the hook (a standing instruction not
+  to dispatch agents unless the user asked);
+- **`/clear`** would reset the counter and restore the ability to reply — *by destroying
+  the context needed to compose the reply.*
+
+So the exit is neither closed (as in the original incident) nor inert (as in the aggregate
+write case). It is **an exit that destroys the work it unblocks.** A remedy whose cost is
+precisely the thing it is being taken for is worse than an inert one, because an inert
+remedy wastes an attempt while this one succeeds and still loses.
+
+This is the strongest argument on this page for the aggregate tier needing a remedy that
+is neither a dispatch nor a context reset — and, separately, for the relay CLI being
+exempt from read counting on its own merits, since `downbeat send`/`reply` cannot read
+anything by construction.
+
 One further observation, recorded WITHOUT a mechanism because the running copy was
 0.11.2 while `main` was at 0.11.5 and this page's neighbour says not to infer a version
 from behaviour: the streak was **not** reset by an intervening `TaskUpdate`. Whether the
