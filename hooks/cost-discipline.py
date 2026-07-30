@@ -1590,9 +1590,18 @@ def handle_pre_tool(payload):
                 f"⚠️  Aggregate read discipline: {AGGREGATE_THRESHOLD} inline mechanical tool calls in main this session. "
                 "Per delegation-discipline/references/hard-rules.md, the next reading task must be dispatched to a Haiku scout. "
                 "Counter resets on /clear or successful Agent dispatch.")
+            # log_fire keeps the flat aggregate_reads kwarg for continuity with
+            # existing fire-log rows, but ALSO logs the scoped agent_reads/scope
+            # that actually caused this fire — the flat figure is a different
+            # counter as of this PR (see _agent_scope) and, for a sub-agent's
+            # own warning, is the DISPATCHER's count, not the number that
+            # crossed the threshold. Logging only the flat one would make the
+            # fire log — the one instrument already established as trustworthy
+            # — record a number that did not fire the event.
             log_fire("aggregate_15", session_id, "warn",
                      tool_calls_total=state.get("tool_calls_total"),
-                     aggregate_reads=state.get("aggregate_reads"))
+                     aggregate_reads=state.get("aggregate_reads"),
+                     agent_reads=_scoped["agent_reads"], scope=_scope)
         elif _scoped["agent_reads"] >= AGGREGATE_ESCALATION and "aggregate_25" not in _scoped_fired:
             _scoped_fired.append("aggregate_25")
             emit(
@@ -1601,7 +1610,8 @@ def handle_pre_tool(payload):
                 "Stop and dispatch a Haiku scout NOW, or run /clear and re-prime from a plan file.")
             log_fire("aggregate_25", session_id, "warn",
                      tool_calls_total=state.get("tool_calls_total"),
-                     aggregate_reads=state.get("aggregate_reads"))
+                     aggregate_reads=state.get("aggregate_reads"),
+                     agent_reads=_scoped["agent_reads"], scope=_scope)
 
         # Streak warn tier shares the read_streak counter with the block tier above
         # (single source of truth — no desync between the two consecutive-read measures).
@@ -1613,7 +1623,8 @@ def handle_pre_tool(payload):
                 "Next action must either write/edit something concrete, or dispatch a Haiku agent.")
             log_fire("streak_4", session_id, "warn",
                      tool_calls_total=state.get("tool_calls_total"),
-                     aggregate_reads=state.get("aggregate_reads"))
+                     aggregate_reads=state.get("aggregate_reads"),
+                     read_streak=_scoped["read_streak"], scope=_scope)
     else:
         # any non-read tool resets the streak window for THIS call's scope only —
         # a dispatcher's Write must not reset a sub-agent's streak, or vice versa.
