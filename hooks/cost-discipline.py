@@ -641,6 +641,10 @@ def _segment_from_state(state):
     by_tool_chars = state.get("tool_result_chars_by_tool", {}) or {}
     return {
         "started_at": state.get("started_at"),
+        # state["tool_calls_total"] is also read elsewhere for unrelated purposes (the
+        # 300k/600k context-ledger warn message, the post-compact >=60 /handoff nudge)
+        # and must never be repurposed or reset for ledger bookkeeping (carried over
+        # from PR #38).
         # DELTA against the segment base, not the raw counter: tool_calls_total is
         # monotonic across compaction by design, so storing it raw would make
         # _sum_segments count every pre-compaction call twice.

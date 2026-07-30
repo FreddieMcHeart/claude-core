@@ -12,17 +12,23 @@ spec.loader.exec_module(ms)
 
 
 def _led(sid, date, tokens=8500, calls=10, metered=8, aggr=2, usd=1.5, chars=30000):
+    """Build a ledger in the NEW (segments/totals) schema — matching the real
+    ``build_cost_ledger`` output shape, not a fixture that quietly encodes the
+    old flat schema the reader used to expect."""
     return {
         "session_id": sid,
         "updated_at": f"{date}T12:00:00+00:00",
         "main_model": "opus",
-        "tool_calls_total": calls,
-        "metered_results": metered,
-        "tool_result_chars": chars,
-        "tool_result_tokens_est": tokens,
-        "cache_reread_usd_per_turn_est": usd,
-        "aggregate_reads": aggr,
-        "tool_result_chars_by_tool": {"Read": {"chars": chars, "tokens": tokens}},
+        "segments": [],
+        "totals": {
+            "tool_calls_total": calls,
+            "metered_results": metered,
+            "tool_result_chars": chars,
+            "tool_result_tokens_est": tokens,
+            "cache_reread_usd_per_turn_est": usd,
+            "aggregate_reads": aggr,
+            "tool_result_chars_by_tool": {"Read": {"chars": chars, "tokens": tokens}},
+        },
     }
 
 
@@ -64,7 +70,9 @@ def test_ledger_metrics_excludes_zero_sessions():
 
 def test_ledger_metrics_tolerates_null_field():
     bad = _led("a", "2026-07-19")
-    bad["tool_result_tokens_est"] = None  # partial/interrupted ledger must not crash
+    # lives in totals, not top-level — _ledger_view merges totals OVER the top
+    # level, so a top-level-only null would be shadowed by the real numeric value.
+    bad["totals"]["tool_result_tokens_est"] = None  # partial/interrupted ledger must not crash
     assert ms.ledger_metrics([bad])["result_tokens_est"]["total"] == 0
 
 
