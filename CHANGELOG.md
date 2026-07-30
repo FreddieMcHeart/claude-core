@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.11.4 (2026-07-30)
+
+### Bug Fixes
+
+- Fire log now records the scoped count that actually fired, not the flat total
+  ([`e7b536d`](https://github.com/FreddieMcHeart/claude-core/commit/e7b536dc9b9c9e1349a88ac11618c82f8d63ae06))
+
+- Sub-agent detection keyed on payload, not background-job signal; per-agent state scoping
+  ([`43d41e3`](https://github.com/FreddieMcHeart/claude-core/commit/43d41e31334fc3f0c2858f36f775710e80e58ec4))
+
+
 ## v0.11.3 (2026-07-30)
 
 ### Bug Fixes
