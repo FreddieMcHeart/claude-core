@@ -160,9 +160,30 @@ candidates, and the reason the first two lose is worth keeping:
 
 ```
 { session_id, cwd, main_model,
-  segments: [ {started_at, tool_calls_total, tool_result_chars, by_tool, dispatches} ],
-  totals:   {…summed at write time…} }
+  segments: [ {
+    started_at,
+    tool_calls_total,       # DELTA vs state["segment_base_tool_calls"], not the raw
+                            #   counter — tool_calls_total is monotonic across compaction
+                            #   (the router nudge indexes on it), so storing it raw would
+                            #   make the sum count every pre-compaction call twice
+    metered_results, tool_result_chars, aggregate_reads,
+    by_tool,                # {tool_name: chars}
+    dispatches,             # {subagent_type: count} — sourced from
+                            #   tool_input.subagent_type at the DISPATCH_TOOLS branch in
+                            #   handle_pre_tool, counted only on an ALLOWED dispatch
+    result_bytes_buckets,   # {lower_edge_str: count}, log-scaled, bounded
+  } ],
+  totals:   {…summed from segments at write time; nothing else is a source…} }
 ```
+
+The annotations above are deliberate: an earlier revision listed `dispatches` here with its
+sourcing stated twelve lines below, under a paragraph a partial read would miss — so the
+schema appeared to name a field that did not exist. A reader must not need a later line to
+trust this block.
+
+**Every field a segment carries must be reset at a boundary**, or the closed segment and
+the newly opened one both carry it and the sum double-counts. `tool_calls_total` is the one
+exception, handled by moving its per-segment base rather than zeroing the counter.
 
 Append-only means no arithmetic can go wrong, and it answers strictly more: a
 resume/compaction boundary is exactly where behaviour changes, and per-segment data
@@ -190,6 +211,18 @@ how this class of defect survives review.
 **Coupling to the deferred perf finding** at the top of this file: a segments list makes
 the per-`PostToolUse` write larger, which raises the priority of throttling that write
 from "nice" to "do it in the same PR".
+
+**Throttle: skip unchanged writes, NOT every Nth write.** A count-based throttle (write
+when `metered_results % 5 == 0`) was implemented first and rejected on measurement: a
+session with fewer than 5 metered results then holds only the zeroed segment
+`SessionStart` opened, so the ledger reads **zeros for a session that did work** — the
+same "indistinguishable from the bug this entry exists to fix" state the sequencing
+constraint above warns about, reintroduced by the optimisation. Six existing cost-ledger
+tests failed on it. Skipping writes whose reported counters are *unchanged* is lossless by
+construction and still removes the redundant write on the dispatch / unmetered paths. The
+signature it compares must be JSON-native — state round-trips through JSON, and a nested
+tuple returns as a nested list that never compares equal, which would leave the throttle
+permanently dead while still looking implemented.
 
 ### `Bash` counts toward the read streak content-blind
 
