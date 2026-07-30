@@ -36,6 +36,21 @@ DEFAULT_DIR = Path.home() / ".claude" / "cost-ledger"
 
 # ---------------------------------------------------------------- loading
 
+def _ledger_view(led):
+    """Normalize old (flat) and new (totals-nested) ledger schemas into one flat
+    view for reading metric fields. New files: every key inside ``totals`` (same
+    names the old flat schema used) is merged to the top level. Old files: there
+    is no ``totals`` key, so nothing changes — the pre-existing flat fields are
+    used as-is. Fields with NO old-schema equivalent (``segment_count``,
+    ``dispatches``, ``result_bytes_buckets``) are correctly ABSENT on old files
+    through this same merge, not defaulted to zero/empty — do not add a fallback
+    for them. A zero there would be a measurement claim about a session that
+    predates the field existing, which is exactly the failure this workstream
+    exists to remove.
+    """
+    return {**led, **(led.get("totals") or {})}
+
+
 def load_ledgers(ledger_dir):
     """Read + parse every ``<session>.json``; skip unreadable/malformed files."""
     out = []
@@ -45,7 +60,7 @@ def load_ledgers(ledger_dir):
         except (OSError, ValueError):
             continue
         if isinstance(data, dict):
-            out.append(data)
+            out.append(_ledger_view(data))
     return out
 
 
@@ -71,6 +86,7 @@ def _date(led):
 
 def is_zero_session(led):
     """A ledger seeded at SessionStart that never metered a result."""
+    led = _ledger_view(led)
     return not led.get("metered_results") and not led.get("tool_result_chars")
 
 
@@ -85,6 +101,7 @@ def _tool_tokens(value):
 
 
 def _top_tool(led):
+    led = _ledger_view(led)
     by_tool = led.get("tool_result_chars_by_tool") or {}
     if not by_tool:
         return "-"
@@ -113,6 +130,7 @@ def filter_ledgers(ledgers, show_all=False, since=None):
 # ---------------------------------------------------------------- aggregation
 
 def totals(ledgers):
+    ledgers = [_ledger_view(x) for x in ledgers]
     dates = [d for d in (_date(x) for x in ledgers) if d]
     models = {}
     for x in ledgers:
@@ -134,6 +152,7 @@ def by_tool_rollup(ledgers):
     """{tool: {chars, tokens}} summed across ledgers, sorted by chars descending."""
     acc = {}
     for x in ledgers:
+        x = _ledger_view(x)
         for tool, value in (x.get("tool_result_chars_by_tool") or {}).items():
             bucket = acc.setdefault(tool, {"chars": 0, "tokens": 0})
             bucket["chars"] += _tool_chars(value)
@@ -142,8 +161,15 @@ def by_tool_rollup(ledgers):
 
 
 def per_session_rows(ledgers, top=15):
-    """Ledgers sorted by est result-tokens descending; ``top<=0`` returns all."""
-    ranked = sorted(ledgers, key=lambda x: _num(x.get("tool_result_tokens_est")), reverse=True)
+    """Ledgers sorted by est result-tokens descending; ``top<=0`` returns all.
+
+    Returns NORMALIZED views (see ``_ledger_view``), not the raw input dicts —
+    every downstream reader of this function's output (the per-session table
+    in ``format_report``, the ``sessions`` list in ``build_json``) reads flat
+    metric fields directly, so the flattening has to happen before it returns.
+    """
+    views = [_ledger_view(x) for x in ledgers]
+    ranked = sorted(views, key=lambda x: _num(x.get("tool_result_tokens_est")), reverse=True)
     return ranked[:top] if top and top > 0 else ranked
 
 

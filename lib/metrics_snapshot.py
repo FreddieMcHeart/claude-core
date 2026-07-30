@@ -100,7 +100,10 @@ def _in_window(date, since, until):
 def ledger_metrics(ledgers):
     """Per-session ledger stats over active (non-zero) sessions. Every value here
     is SINCE THE LAST COMPACTION for its session, not a session lifetime total."""
-    active = clr.filter_ledgers(ledgers, show_all=False)
+    # _ledger_view: `active` may hold raw ledger dicts (old flat schema, or new
+    # totals-nested schema) that never passed through clr.load_ledgers — normalize
+    # per item here rather than assume an upstream loader already did it.
+    active = [clr._ledger_view(x) for x in clr.filter_ledgers(ledgers, show_all=False)]
     tokens = [_num(x.get("tool_result_tokens_est")) for x in active]
     calls = [_num(x.get("tool_calls_total")) for x in active]
     metered = [_num(x.get("metered_results")) for x in active]
