@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.11.7 (2026-07-30)
+
+### Bug Fixes
+
+- Cost ledger accumulates in segments across resets, and counts dispatches by type
+  ([`8986ef5`](https://github.com/FreddieMcHeart/claude-core/commit/8986ef55beb4aaf7ebbaefe7c46ce8fc0b01695c))
+
+- **cost-ledger**: Both readers now handle the totals-nested schema, not just top-level
+  ([`1368ee5`](https://github.com/FreddieMcHeart/claude-core/commit/1368ee521e81f6a0ad2a52b9d4040f7cf4565ba0))
+
+
 ## v0.11.6 (2026-07-30)
 
 ### Bug Fixes
