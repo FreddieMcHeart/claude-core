@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.11.5 (2026-07-30)
+
+### Bug Fixes
+
+- **delegation-discipline**: Repoint the OTHER dead provenance pointer
+  ([`7db2910`](https://github.com/FreddieMcHeart/claude-core/commit/7db291001696d1dbcb016ee572dc2b9ac009249c))
+
+
 ## v0.11.4 (2026-07-30)
 
 ### Bug Fixes
