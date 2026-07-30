@@ -34,20 +34,20 @@ def test_build_cost_ledger_shape_and_derived_fields():
     state["tool_result_chars_by_tool"] = {"Read": 30000, "Bash": 5000}
     led = cd.build_cost_ledger(state)
     assert led["session_id"] == "s1"
-    assert led["tool_result_chars"] == 35000
-    assert led["tool_result_tokens_est"] == int(35000 / cd.LEDGER_CHARS_PER_TOKEN)
-    assert led["cache_reread_usd_per_turn_est"] >= 0
+    assert led["totals"]["tool_result_chars"] == 35000
+    assert led["totals"]["tool_result_tokens_est"] == int(35000 / cd.LEDGER_CHARS_PER_TOKEN)
+    assert led["totals"]["cache_reread_usd_per_turn_est"] >= 0
     # per-tool breakdown preserved, token-derived, and sorted descending by chars
-    assert list(led["tool_result_chars_by_tool"].keys()) == ["Read", "Bash"]
-    assert led["tool_result_chars_by_tool"]["Read"]["chars"] == 30000
-    assert led["tool_result_chars_by_tool"]["Read"]["tokens"] == int(30000 / cd.LEDGER_CHARS_PER_TOKEN)
+    assert list(led["totals"]["tool_result_chars_by_tool"].keys()) == ["Read", "Bash"]
+    assert led["totals"]["tool_result_chars_by_tool"]["Read"]["chars"] == 30000
+    assert led["totals"]["tool_result_chars_by_tool"]["Read"]["tokens"] == int(30000 / cd.LEDGER_CHARS_PER_TOKEN)
 
 
 def test_build_cost_ledger_empty_state_is_zeroed_not_crashing():
     led = cd.build_cost_ledger(cd.new_state("empty"))
-    assert led["tool_result_chars"] == 0
-    assert led["tool_result_tokens_est"] == 0
-    assert led["tool_result_chars_by_tool"] == {}
+    assert led["totals"]["tool_result_chars"] == 0
+    assert led["totals"]["tool_result_tokens_est"] == 0
+    assert led["totals"]["tool_result_chars_by_tool"] == {}
 
 
 # ---------------- write_cost_ledger ----------------
@@ -61,7 +61,7 @@ def test_write_cost_ledger_persists_collectable_json(tmp_path, monkeypatch):
     assert p.exists()
     data = json.loads(p.read_text())
     assert data["session_id"] == "sess-abc"
-    assert data["tool_result_chars"] == 400
+    assert data["totals"]["tool_result_chars"] == 400
 
 
 def test_write_cost_ledger_never_raises_on_bad_state(tmp_path, monkeypatch):
@@ -85,7 +85,7 @@ def test_post_tool_meters_nondispatch_read_and_writes_ledger(tmp_path, monkeypat
     assert state["tool_result_chars_by_tool"]["Read"] >= 5000
     # and it was written to the collectable cross-session ledger
     led = json.loads((cd.COST_LEDGER_DIR / "sread.json").read_text())
-    assert led["tool_result_chars_by_tool"]["Read"]["chars"] >= 5000
+    assert led["totals"]["tool_result_chars_by_tool"]["Read"]["chars"] >= 5000
 
 
 def test_post_tool_writes_ledger_on_agent_dispatch_and_resets_counters(tmp_path, monkeypatch):
@@ -124,8 +124,8 @@ def test_post_tool_meters_mcp_result(tmp_path, monkeypatch):
     assert state["metered_results"] == 1
     assert state["tool_calls_total"] == 0
     led = json.loads((cd.COST_LEDGER_DIR / "smcp.json").read_text())
-    assert led["tool_result_chars"] >= 6000
-    assert led["metered_results"] == 1
+    assert led["totals"]["tool_result_chars"] >= 6000
+    assert led["totals"]["metered_results"] == 1
 
 
 def test_post_tool_skips_empty_tool_name_bucket(tmp_path, monkeypatch):

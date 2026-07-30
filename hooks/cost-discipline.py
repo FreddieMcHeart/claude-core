@@ -500,6 +500,23 @@ def new_state(session_id):
                                  # tool_calls_total it also counts mcp__ tools, which
                                  # PostToolUse meters but PreToolUse does not increment)
         "tool_result_chars_by_tool": {},  # cost-ledger: per-tool char breakdown (which tool floods)
+        "dispatches_by_type": {},  # cost-ledger: {subagent_type: count}, sourced from
+                                   # tool_input.subagent_type at the dispatch site. BY TYPE,
+                                   # not a bare total — "delegated downward to what?" is the
+                                   # question a single integer cannot answer.
+        "result_bytes_buckets": {},  # cost-ledger: {lower_edge_str: count} log-scaled
+                                     # histogram of per-result sizes; bounded so the hot-path
+                                     # state doc stays O(1) (see LEDGER_BYTE_BUCKET_EDGES)
+        "last_ledger_sig": None,  # cost-ledger: counters as of the last ledger write, so an
+                                  # unchanged write can be skipped losslessly. Stored as a
+                                  # list, not a tuple — state round-trips through JSON.
+        "segment_base_tool_calls": 0,  # cost-ledger: tool_calls_total at this segment's start.
+                                     # tool_calls_total must stay MONOTONIC (the router nudge
+                                     # uses it as an index, and PostCompact deliberately keeps
+                                     # it), so the segment stores the DELTA against this base.
+                                     # Without it, summing segments would double-count every
+                                     # call made before a compaction — the same running-total
+                                     # -vs-delta trap that segments exist to avoid.
         "cwd": None,             # cost-ledger: working dir, captured at session start
         "started_at": None,      # cost-ledger: ISO8601, captured at session start
         "reader_violations": {},  # I4: per-family inline-read violation count (post-first-fire)
@@ -553,49 +570,216 @@ def save_state(state):
 LEDGER_CHARS_PER_TOKEN = 3.5
 LEDGER_USD_PER_MTOK = 22.5
 
+# Per-result size histogram. Bounded and log-scaled ON PURPOSE: the state doc is
+# re-serialised on every tool call, so an O(calls) list of per-call sizes would be
+# re-written on every subsequent call — quadratic over a session, and the ROADMAP
+# already flags the segments list making that write bigger. Buckets are O(1) per
+# segment and still answer the tail question ("how often does a result blow past
+# 64k?"), which a mean cannot. Keys are the lower edge as a string so the JSON
+# sorts numerically after int().
+LEDGER_BYTE_BUCKET_EDGES = (0, 256, 1024, 4096, 16384, 65536, 262144, 1048576)
+
+# Throttle for the PostToolUse ledger write (ROADMAP: "raises the priority of
+# throttling that write from nice to do it in the same PR").
+#
+# It skips writes whose reported counters are UNCHANGED, not every Nth write. A
+# count-based throttle (write when metered_results % 5 == 0) was implemented first and
+# rejected on measurement: a session with fewer than 5 metered results then holds only
+# the zeroed segment SessionStart opened, so the ledger reads ZEROS for a session that
+# did work — the exact state the ROADMAP names as "indistinguishable from the bug this
+# entry exists to fix". Six existing cost-ledger tests failed on it and were right to.
+#
+# Skipping unchanged writes is lossless by construction: if any reported counter moved,
+# the write happens. What it removes is the redundant write on paths where PostToolUse
+# fires without changing anything the ledger reports (dispatch branches, unmetered tools).
+# Every element must be JSON-NATIVE and the result a list, not a tuple. state round-trips
+# through JSON, so a nested tuple comes back as a nested list and would never compare
+# equal to a freshly built one — the throttle would silently never fire while still
+# looking implemented. Caught by test_throttle_signature_survives_a_json_round_trip,
+# which failed against the first version of this function.
+def _ledger_signature(state):
+    dispatches = state.get("dispatches_by_type", {}) or {}
+    return [
+        state.get("tool_calls_total", 0),
+        state.get("metered_results", 0),
+        state.get("tool_result_chars", 0),
+        state.get("aggregate_reads", 0),
+        json.dumps(sorted(dispatches.items())),  # exact, and a plain str
+    ]
+
+
+def _bytes_bucket(size):
+    """Lower edge of the log-scaled bucket `size` falls in, as a str key."""
+    edge = LEDGER_BYTE_BUCKET_EDGES[0]
+    for e in LEDGER_BYTE_BUCKET_EDGES:
+        if size >= e:
+            edge = e
+        else:
+            break
+    return str(edge)
+
 
 def cost_ledger_path(session_id):
     return COST_LEDGER_DIR / f"{session_id}.json"
 
 
-def build_cost_ledger(state):
-    """Derive the compact, collectable per-session cost summary from working state.
-    Pure function (no I/O) so it is trivially testable."""
+def read_cost_ledger(session_id):
+    """The ledger as currently on disk, or {} if absent/unreadable. The ledger
+    OUTLIVES /tmp state, which is the whole reason segments exist: state resets at
+    SessionStart, the file does not, and the prior segments are the only surviving
+    record of everything before that boundary."""
+    try:
+        return json.loads(cost_ledger_path(session_id).read_text())
+    except Exception:
+        return {}
+
+
+def _segment_from_state(state):
+    """This session-arc's counters as one segment. Everything here is a running
+    total for the CURRENT arc only — state was zeroed at the last SessionStart."""
     chars = state.get("tool_result_chars", 0)
-    tokens = int(chars / LEDGER_CHARS_PER_TOKEN)
     by_tool_chars = state.get("tool_result_chars_by_tool", {}) or {}
-    by_tool = {
-        name: {"chars": c, "tokens": int(c / LEDGER_CHARS_PER_TOKEN)}
-        for name, c in sorted(by_tool_chars.items(), key=lambda kv: kv[1], reverse=True)
-    }
     return {
-        "session_id": state.get("session_id"),
-        "cwd": state.get("cwd"),
         "started_at": state.get("started_at"),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "main_model": get_main_model_name(),
-        "tool_calls_total": state.get("tool_calls_total", 0),  # PreToolUse count (excludes mcp__)
-        "metered_results": state.get("metered_results", 0),    # matches tool_result_chars
+        # DELTA against the segment base, not the raw counter: tool_calls_total is
+        # monotonic across compaction by design, so storing it raw would make
+        # _sum_segments count every pre-compaction call twice.
+        "tool_calls_total": max(
+            0, state.get("tool_calls_total", 0) - state.get("segment_base_tool_calls", 0)),
+        "metered_results": state.get("metered_results", 0),
+        "tool_result_chars": chars,
+        "aggregate_reads": state.get("aggregate_reads", 0),
+        "by_tool": dict(by_tool_chars),
+        # Sourced from tool_input.subagent_type at the dispatch site, counted BY TYPE:
+        # "did this session delegate, and downward to what?" — a bare total cannot
+        # answer that. See the DISPATCH_TOOLS branch in handle_pre_tool.
+        "dispatches": dict(state.get("dispatches_by_type", {}) or {}),
+        "result_bytes_buckets": dict(state.get("result_bytes_buckets", {}) or {}),
+    }
+
+
+def _sum_segments(segments):
+    """Derive every total from the stored segments ALONE. Nothing else may be a
+    source: a stored total that cannot be re-derived from its own segments is a
+    second source of truth and will drift from the first."""
+    chars = sum(s.get("tool_result_chars", 0) for s in segments)
+    tokens = int(chars / LEDGER_CHARS_PER_TOKEN)
+    by_tool_chars = {}
+    dispatches = {}
+    buckets = {}
+    for s in segments:
+        for name, c in (s.get("by_tool") or {}).items():
+            by_tool_chars[name] = by_tool_chars.get(name, 0) + c
+        for t, n in (s.get("dispatches") or {}).items():
+            dispatches[t] = dispatches.get(t, 0) + n
+        for b, n in (s.get("result_bytes_buckets") or {}).items():
+            buckets[b] = buckets.get(b, 0) + n
+    return {
+        "segment_count": len(segments),
+        "tool_calls_total": sum(s.get("tool_calls_total", 0) for s in segments),
+        "metered_results": sum(s.get("metered_results", 0) for s in segments),
         "tool_result_chars": chars,
         "tool_result_tokens_est": tokens,
         "cache_reread_usd_per_turn_est": round(tokens * LEDGER_USD_PER_MTOK / 1e6, 2),
-        "aggregate_reads": state.get("aggregate_reads", 0),
-        "tool_result_chars_by_tool": by_tool,
+        "aggregate_reads": sum(s.get("aggregate_reads", 0) for s in segments),
+        "tool_result_chars_by_tool": {
+            name: {"chars": c, "tokens": int(c / LEDGER_CHARS_PER_TOKEN)}
+            for name, c in sorted(by_tool_chars.items(), key=lambda kv: kv[1], reverse=True)
+        },
+        "dispatches": dict(sorted(dispatches.items())),
+        "result_bytes_buckets": {k: buckets[k] for k in sorted(buckets, key=int)},
     }
 
 
-def write_cost_ledger(state):
-    """Best-effort: persist the per-session cost summary to the cross-session ledger dir.
-    Never raises — a ledger write must not block or fail a tool call."""
+def build_cost_ledger(state, prior=None):
+    """Derive the collectable per-session summary as SEGMENTS plus derived totals.
+    Pure function (no I/O) so it is trivially testable — `prior` is the ledger already
+    on disk, passed in rather than read here.
+
+    The last segment is REPLACED with this arc's running totals, never added to one:
+    write_cost_ledger is called on every PostToolUse with a running total, so summing
+    on write would multiply (1+2+...+n) instead of accumulating. Replace-then-sum is
+    what makes a repeat write idempotent.
+
+    SCOPE DECISION (explicit, per the gauge design's per-scope requirement): totals here
+    are SUMMED ACROSS SCOPES, and `dispatches` is broken out BY TYPE. Bytes are
+    deliberately NOT per-scope — the metering site in handle_post_tool sees a tool result
+    with no agent scope attached, so a per-scope byte figure would be fabricated rather
+    than measured. Per-scope read/streak state stays where it lives, in
+    state["agent_counters"], and is not re-derived here. If per-scope bytes are ever
+    wanted, the scope has to be threaded to the metering site first."""
+    prior = prior or {}
+    segments = list(prior.get("segments") or [])
+    current = _segment_from_state(state)
+    if segments:
+        segments[-1] = current
+    else:
+        segments = [current]
+    return {
+        "session_id": state.get("session_id"),
+        "cwd": state.get("cwd"),
+        "started_at": (segments[0].get("started_at")
+                       if segments[0].get("started_at") else state.get("started_at")),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "main_model": get_main_model_name(),
+        "segments": segments,
+        "totals": _sum_segments(segments),
+    }
+
+
+def open_cost_ledger_segment(state):
+    """Append a fresh segment for a new session arc, preserving every prior one.
+    Called at SessionStart, AFTER state has been reset: from here on the running
+    totals in state describe only this arc, and the closed segments carry the rest.
+    Empty segments are NOT suppressed — a session that started and did nothing is a
+    real observation, and filtering it to keep the file tidy would be a vacuity trap."""
     try:
         session_id = state.get("session_id")
         if not session_id:
             return
-        COST_LEDGER_DIR.mkdir(parents=True, exist_ok=True)
-        p = cost_ledger_path(session_id)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps(build_cost_ledger(state), indent=2))
-        tmp.replace(p)
+        prior = read_cost_ledger(session_id)
+        segments = list(prior.get("segments") or [])
+        segments.append(_segment_from_state(state))
+        ledger = dict(prior)
+        ledger.update({
+            "session_id": session_id,
+            "cwd": state.get("cwd") or prior.get("cwd"),
+            "started_at": prior.get("started_at") or state.get("started_at"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "main_model": get_main_model_name(),
+            "segments": segments,
+            "totals": _sum_segments(segments),
+        })
+        _atomic_write_ledger(session_id, ledger)
+    except Exception:
+        pass
+
+
+def _atomic_write_ledger(session_id, ledger):
+    COST_LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+    p = cost_ledger_path(session_id)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(ledger, indent=2))
+    tmp.replace(p)
+
+
+def write_cost_ledger(state, force=False):
+    """Best-effort: persist the per-session cost summary to the cross-session ledger dir.
+    Never raises — a ledger write must not block or fail a tool call.
+
+    Skips writes whose reported counters are unchanged since the last one (see
+    _ledger_signature for why that throttle is lossless and a count-based one is not).
+    force=True bypasses it for boundary writes."""
+    try:
+        session_id = state.get("session_id")
+        if not session_id:
+            return
+        sig = _ledger_signature(state)
+        if not force and state.get("last_ledger_sig") == sig:
+            return
+        _atomic_write_ledger(
+            session_id, build_cost_ledger(state, read_cost_ledger(session_id)))
+        state["last_ledger_sig"] = sig
     except Exception:
         pass
 
@@ -1975,6 +2159,15 @@ def handle_pre_tool(payload):
                          subagent_type=subagent_type,
                          description=(tool_input.get("description") or "")[:120])
                 return
+        # Cost-ledger dispatch counting. Reached only on an ALLOWED dispatch — the
+        # block path above returns first, and a refused dispatch must not advance a
+        # counter: that is the ratchet defect the read-block tier was fixed for, where
+        # a counter measured work that never happened. Keyed by subagent_type because
+        # the question is "delegated downward to WHAT", not "how many times".
+        _d_type = tool_input.get("subagent_type") or "unknown"
+        _d_by_type = state.setdefault("dispatches_by_type", {})
+        _d_by_type[_d_type] = _d_by_type.get(_d_type, 0) + 1
+        save_state(state)
 
     # ---------- Workflow governance (warn + log only; design 2026-06-02) ----------
     if tool_name == "Workflow":
@@ -2028,6 +2221,12 @@ def handle_post_tool(payload):
 
     state = load_state(session_id)
     state["tool_result_chars"] = state.get("tool_result_chars", 0) + size
+    # Per-result size distribution, bucketed. The sum above gives the mean for free
+    # (with metered_results); this gives the TAIL, which is what a byte-gated block
+    # tier needs — the point of such a gate is catching outliers, and a mean hides them.
+    _buckets = state.setdefault("result_bytes_buckets", {})
+    _b = _bytes_bucket(size)
+    _buckets[_b] = _buckets.get(_b, 0) + 1
     # metered_results is the denominator that actually matches tool_result_chars: it
     # counts every result we summed, including mcp__ tools (PostToolUse meters them but
     # PreToolUse never increments tool_calls_total for them).
@@ -2140,10 +2339,14 @@ def handle_session_start(payload):
     # must never be sequenced ahead of session-start context (a future un-guarded
     # failure there could otherwise preempt the banner).
     emit_session_context(force_load_rules())
-    # Seed the cross-session cost ledger LAST so a session that does no tool calls
-    # still appears in the collection (with zeroed counters).
+    # OPEN A NEW SEGMENT last, so a session that does no tool calls still appears in
+    # the collection (with zeroed counters) — empty segments are deliberately kept.
+    # This must APPEND rather than write: state was just reset above, so a plain
+    # write_cost_ledger would replace the last segment with the zeroed one and destroy
+    # everything before this boundary. That overwrite-on-reset IS the defect segments
+    # exist to fix; the ledger file outlives /tmp state.
     if session_id:
-        write_cost_ledger(load_state(session_id))
+        open_cost_ledger_segment(load_state(session_id))
 
 
 def handle_post_compact(payload):
@@ -2183,7 +2386,18 @@ def handle_post_compact(payload):
     # compactions_seen is NOT reset — it counts across the session's lifetime to
     # detect repeated auto-compaction (the signal to switch to a lossless /handoff).
     state["compactions_seen"] = state.get("compactions_seen", 0) + 1
+    # A compaction is a SEGMENT BOUNDARY: /clear opens a new segment rather than
+    # zeroing the derived total. Every field that _segment_from_state reads must be
+    # reset here, or the closed segment and the new one both carry it and
+    # _sum_segments double-counts. tool_calls_total is the exception — it stays
+    # monotonic for the router nudge, so we move its per-segment BASE instead.
+    state["dispatches_by_type"] = {}
+    state["result_bytes_buckets"] = {}
+    state["segment_base_tool_calls"] = state.get("tool_calls_total", 0)
     save_state(state)
+    # Append AFTER the resets and BEFORE any further write: a plain write would
+    # replace the closed segment with the freshly-zeroed one and lose the arc.
+    open_cost_ledger_segment(state)
 
     # Emit a re-routing reminder. NOTE: PostCompact does NOT support
     # hookSpecificOutput.additionalContext (only PreToolUse / UserPromptSubmit /
