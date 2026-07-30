@@ -161,3 +161,32 @@ def test_warn_tier_dedup_is_scoped_so_one_agent_crossing_a_threshold_does_not_su
     assert any("Aggregate read discipline" in m["systemMessage"] for m in messages), \
         "the dispatcher's own aggregate_15 warning must still fire even though sub-1 already claimed it"
     assert "aggregate_15" in saved["agent_counters"]["main"]["warnings_fired"]
+
+
+def test_fire_log_records_the_scoped_number_that_actually_fired_it(monkeypatch, capsys):
+    """A sub-agent's warning must not log the flat, session-wide aggregate_reads
+    as if that were the count that tripped it — that number is the DISPATCHER's,
+    since the flat field sums every scope. log_fire keeps the flat field for
+    continuity but must ALSO carry the scoped figure and which scope fired,
+    or the one instrument already trusted for "warnings ignored 82-88%" would
+    record a number that did not cause the event."""
+    fires = []
+    _armed(monkeypatch)
+    base = cd.new_state("s1")
+    base["agent_counters"]["sub-1"] = {
+        "read_streak": 0, "agent_reads": cd.AGGREGATE_THRESHOLD - 1, "warnings_fired": []}
+    base["aggregate_reads"] = 999  # deliberately far from sub-1's real count
+
+    monkeypatch.setattr(cd, "load_state", lambda sid: dict(base))
+    monkeypatch.setattr(cd, "save_state", lambda st: None)
+    monkeypatch.setattr(cd, "log_fire",
+                         lambda rule, sid, action, **details: fires.append((rule, details)))
+
+    _fire(capsys, "Read", agent_type="general-purpose", agent_id="sub-1")
+
+    rule, details = next(f for f in fires if f[0] == "aggregate_15")
+    assert details["scope"] == "sub-1"
+    assert details["agent_reads"] == cd.AGGREGATE_THRESHOLD, \
+        "must log the count that actually crossed the threshold, not the flat session total"
+    assert details["aggregate_reads"] == 1000, \
+        "the flat field is still logged too, for continuity — just not as the only number"
