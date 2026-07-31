@@ -250,7 +250,8 @@ def test_throttle_skips_the_scan_entirely(monkeypatch):
 
 # ---------------- handler payload merging ----------------
 
-def _run_handler(monkeypatch, capsys, hyg=None, rlm=None, wiki=(None, None), dated=None):
+def _run_handler(monkeypatch, capsys, hyg=None, rlm=None, wiki=(None, None), dated=None,
+                  drift=(None, None)):
     monkeypatch.setattr(cd, "load_state", lambda sid: {"session_id": sid, "prompts_seen": 0})
     monkeypatch.setattr(cd, "save_state", lambda state: None)
     monkeypatch.setattr(cd, "log_fire", lambda *a, **k: None)
@@ -267,6 +268,11 @@ def _run_handler(monkeypatch, capsys, hyg=None, rlm=None, wiki=(None, None), dat
     # here on a date with no code change — the very decay the feature exists to
     # catch, planted in the suite that guards it.
     monkeypatch.setattr(cd, "dated_claims_context", lambda state: (dated, None))
+    # Stubbed for the same reason as wiki/dated: this machine's real
+    # installed_plugins.json/known_marketplaces.json are live state (the repo is
+    # routinely ahead of the installed hook copy), and a payload-merging test
+    # must not depend on today's machine drift.
+    monkeypatch.setattr(cd, "plugin_version_drift_context", lambda state: drift)
     cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "hi"})
     out = capsys.readouterr().out.strip()
     return json.loads(out) if out else None

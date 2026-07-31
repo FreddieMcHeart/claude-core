@@ -136,6 +136,16 @@ DATED_CLAIMS = [
     },
 ]
 
+# ---- Plugin version drift (2026-07-31) ----
+# Fourth recurrence: the repository moves ahead of the installed hook copy and
+# nothing compares them, so the gap is only noticed after it has already misled
+# someone. See ROADMAP.md, "Nothing compares the installed plugin version to
+# the repository", for the full history.
+PLUGIN_NAME = "claude-core-hooks"   # this hook's own plugin identity — a fact, not a guess
+PLUGINS_DIR = Path.home() / ".claude" / "plugins"
+INSTALLED_PLUGINS_FILE = PLUGINS_DIR / "installed_plugins.json"
+KNOWN_MARKETPLACES_FILE = PLUGINS_DIR / "known_marketplaces.json"
+
 READ_TOOLS = {"Bash", "Read", "Grep", "Glob"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
 DISPATCH_TOOLS = {"Agent", "Task"}
@@ -1509,6 +1519,185 @@ def dated_claims_context(state, today=None):
     )
 
 
+def _resolve_installed_plugin_record(plugin_name=PLUGIN_NAME):
+    """(key, record) for the installed_plugins.json entry matching `plugin_name`,
+    or None if the manifest is absent, unparsable, or has no matching key.
+
+    The on-disk schema is `{"version": 2, "plugins": {"<name>@<marketplace>":
+    [<record>, ...]}}` — a top-level `plugins` wrapper around the "name@market"
+    keys, not those keys at the top level. Verified against the real file on
+    this machine, not assumed from a description of it.
+    """
+    try:
+        data = json.loads(INSTALLED_PLUGINS_FILE.read_text())
+        plugins = data["plugins"]
+    except Exception:
+        return None
+    for key, entries in plugins.items():
+        if key.split("@", 1)[0] == plugin_name and entries:
+            return key, entries[0]
+    return None
+
+
+def _resolve_repo_path(key, cwd):
+    """Locate the git checkout the installed plugin `key` ("name@marketplace")
+    was built from.
+
+    Primary: known_marketplaces.json's directory-source entry for the
+    marketplace — the very record `claude plugin update` reads to find a
+    `-local` checkout, so it is authoritative and needs no re-verification.
+    This path is global: it runs the same regardless of the session's cwd.
+
+    Fallback: walk up from `cwd` looking for `.claude-plugin/plugin.json` whose
+    "name" matches the plugin. `cwd` is genuine session data (the hook's own
+    payload), and the name match is a VERIFICATION of whatever is found, not an
+    assumption about directory structure — a mismatched manifest is rejected,
+    not accepted just because something was there. Coverage on this path is
+    limited to sessions whose cwd sits inside the repo; that gap belongs to the
+    fallback only — the registry path above has none.
+
+    Returns None — never a guessed path — if neither locates it.
+    """
+    plugin_name = key.split("@", 1)[0]
+    marketplace = key.split("@", 1)[1] if "@" in key else None
+    if marketplace:
+        try:
+            registry = json.loads(KNOWN_MARKETPLACES_FILE.read_text())
+            source = (registry.get(marketplace) or {}).get("source") or {}
+            if source.get("source") == "directory" and source.get("path"):
+                candidate = Path(source["path"])
+                if (candidate / ".claude-plugin" / "plugin.json").is_file():
+                    return candidate
+        except Exception:
+            pass  # no usable registry entry — fall through to the walk-up
+
+    if cwd:
+        for parent in [Path(cwd), *Path(cwd).parents]:
+            manifest_path = parent / ".claude-plugin" / "plugin.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except Exception:
+                continue
+            if manifest.get("name") == plugin_name:
+                return parent
+    return None
+
+
+def _git_head_sha(repo_path):
+    try:
+        out = subprocess.run(["git", "-C", str(repo_path), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=5)
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _commits_behind(repo_path, old_sha, new_sha):
+    """Count of commits old_sha..new_sha if old_sha is an ancestor of new_sha,
+    else None — 'diverged', not a fabricated distance."""
+    try:
+        anc = subprocess.run(
+            ["git", "-C", str(repo_path), "merge-base", "--is-ancestor", old_sha, new_sha],
+            capture_output=True, timeout=5)
+        if anc.returncode != 0:
+            return None
+        cnt = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-list", "--count", f"{old_sha}..{new_sha}"],
+            capture_output=True, text=True, timeout=5)
+        if cnt.returncode == 0:
+            return int(cnt.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
+def plugin_version_drift_context(state):
+    """(advisory_or_None, outcome) comparing the installed claude-core-hooks copy
+    against the repository it was built from.
+
+    Outcomes: 'skipped' / 'in_sync' / 'drifted'. Shares the pulse's throttle.
+    Advisory only — drift never blocks work.
+
+    THREE states exist, not two: the repository, the on-disk installed copy,
+    and the copy the currently-running process is serving. This check compares
+    only the first two — `claude plugin update` reports "restart required to
+    apply", so a fresh install can sit on disk before any running session has
+    it loaded, and this check cannot see that. The nudge names which two states
+    it checked and stays silent about the third rather than implying it knows
+    what is executing.
+
+    Primary signal is `gitCommitSha` — a claim about the exact revision,
+    immune to an unreleased checkout sharing a version string with a stale one
+    (the exact evidence class a past reading of this file got wrong; see the
+    ROADMAP entry). Falls back to version-vs-version when the sha is
+    unavailable on either side; the nudge states which signal it used.
+
+    Repo location: known_marketplaces.json's directory-source entry for the
+    installed marketplace — global, no cwd dependency. Falls back to a cwd
+    walk-up verified by plugin-name match, whose coverage is only sessions
+    working inside the repo (documented on that fallback alone; the registry
+    path above has no such gap).
+
+    Self-referential limit, stated rather than solved: this check ships inside
+    the very plugin it audits, so it cannot report on its own freshness until a
+    release ships and an install happens — an "in sync" read from a stale
+    installed copy of the check itself is the same failure shape it exists to
+    catch.
+    """
+    seen = state.get("prompts_seen", 0)
+    if seen < 1 or (seen - 1) % HYGIENE_PROMPT_INTERVAL != 0:
+        return (None, None)
+
+    found = _resolve_installed_plugin_record()
+    if found is None:
+        return (None, "skipped")
+    key, record = found
+
+    repo_path = _resolve_repo_path(key, state.get("cwd"))
+    if repo_path is None:
+        return (None, "skipped")
+
+    try:
+        manifest = json.loads((repo_path / ".claude-plugin" / "plugin.json").read_text())
+    except Exception:
+        return (None, "skipped")
+
+    repo_version = manifest.get("version")
+    installed_version = record.get("version")
+    if not repo_version or not installed_version:
+        return (None, "skipped")
+
+    installed_sha = record.get("gitCommitSha")
+    repo_sha = _git_head_sha(repo_path) if installed_sha else None
+
+    if installed_sha and repo_sha:
+        signal = "commit"
+        if installed_sha == repo_sha:
+            return (None, "in_sync")
+        distance = _commits_behind(repo_path, installed_sha, repo_sha)
+        detail = (f" ({distance} commit(s) behind)" if distance is not None
+                  else " (diverged — installed commit is not an ancestor of repo HEAD)")
+    else:
+        signal = "version"
+        if repo_version == installed_version:
+            return (None, "in_sync")
+        detail = ""
+
+    return (
+        f"**Plugin version drift** — the installed `{PLUGIN_NAME}` copy "
+        f"(v{installed_version}) is behind the repository (v{repo_version}){detail}. "
+        f"Compared via {signal}. Two states checked: repository vs. on-disk "
+        f"installed copy — NOT the copy the currently-running process is "
+        f"serving (`claude plugin update` needs a restart to apply). Run "
+        f"`claude plugin update {PLUGIN_NAME}` and restart the session.",
+        "drifted",
+    )
+
+
 def rlm_fanout_context(prompt):
     """Layer 2: detect cross-repo-strict investigation prompts.
 
@@ -1548,7 +1737,9 @@ def handle_user_prompt_submit(payload):
          "ran and found nothing" stays distinguishable from "never ran".
       3. dated-claim re-validation — same throttle; statements in this repo that
          are true until a date and decay silently after it.
-      4. Layer 2 cross-repo rlm-fanout suggestion.
+      4. plugin version drift — same throttle; the installed claude-core-hooks
+         copy vs. the repository it was built from.
+      5. Layer 2 cross-repo rlm-fanout suggestion.
 
     This handler now writes state (the hygiene pulse needs a prompt counter),
     which the Layer-2 path previously did not. Fail-open throughout.
@@ -1605,6 +1796,18 @@ def handle_user_prompt_submit(payload):
                 )
         except Exception:
             pass  # ditto — its own handler, for the same reason as the two above
+        try:
+            drift, outcome = plugin_version_drift_context(state)
+            if drift:
+                parts.append(drift)
+            if outcome:
+                log_fire(
+                    "plugin_version_drift", session_id,
+                    "warn" if outcome == "drifted" else "info",
+                    outcome=outcome,
+                )
+        except Exception:
+            pass  # ditto — its own handler, for the same reason as the others
 
     rlm = rlm_fanout_context(prompt)
     if rlm:
