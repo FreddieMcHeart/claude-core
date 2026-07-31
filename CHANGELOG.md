@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.12.0 (2026-07-31)
+
+### Bug Fixes
+
+- Registry path verifies plugin identity too, and skip reasons carry why
+  ([`599e673`](https://github.com/FreddieMcHeart/claude-core/commit/599e673ed7675d8ddc29810a1114fe57ffdcf3af))
+
+### Documentation
+
+- **roadmap**: Retract the claim that the plugin update command lied
+  ([`1f354a8`](https://github.com/FreddieMcHeart/claude-core/commit/1f354a8aec09f69da08ba4a4b14fd0ce35d73671))
+
+### Features
+
+- **hook**: Detect installed-vs-repository plugin version drift
+  ([`44773af`](https://github.com/FreddieMcHeart/claude-core/commit/44773af20bd65e43bd101f8030e60864b78363c6))
+
+
 ## v0.11.8 (2026-07-30)
 
 ### Bug Fixes
