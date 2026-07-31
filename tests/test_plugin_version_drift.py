@@ -81,7 +81,7 @@ def _prompt(cwd=None):
 def test_missing_installed_plugins_file_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", tmp_path / "does-not-exist.json")
     monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", tmp_path / "also-missing.json")
-    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped")
+    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped:not_installed")
 
 
 def test_plugin_key_absent_is_skipped(tmp_path, monkeypatch):
@@ -89,7 +89,7 @@ def test_plugin_key_absent_is_skipped(tmp_path, monkeypatch):
                                         [{"version": "1.0.0"}])
     monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", installed)
     monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", tmp_path / "missing.json")
-    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped")
+    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped:not_installed")
 
 
 def test_malformed_installed_plugins_json_is_skipped(tmp_path, monkeypatch):
@@ -97,7 +97,7 @@ def test_malformed_installed_plugins_json_is_skipped(tmp_path, monkeypatch):
     p.write_text("{not valid json")
     monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", p)
     monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", tmp_path / "missing.json")
-    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped")
+    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped:not_installed")
 
 
 def test_missing_plugins_wrapper_key_is_skipped(tmp_path, monkeypatch):
@@ -107,7 +107,7 @@ def test_missing_plugins_wrapper_key_is_skipped(tmp_path, monkeypatch):
     p.write_text(json.dumps({"version": 2, KEY: [{"version": "1.0.0"}]}))
     monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", p)
     monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", tmp_path / "missing.json")
-    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped")
+    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped:not_installed")
 
 
 def test_unlocatable_repo_is_skipped_never_guesses_a_path(tmp_path, monkeypatch):
@@ -119,7 +119,7 @@ def test_unlocatable_repo_is_skipped_never_guesses_a_path(tmp_path, monkeypatch)
     monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", tmp_path / "missing.json")
     unrelated = tmp_path / "unrelated" / "nested"
     unrelated.mkdir(parents=True)
-    assert cd.plugin_version_drift_context(_prompt(cwd=unrelated)) == (None, "skipped")
+    assert cd.plugin_version_drift_context(_prompt(cwd=unrelated)) == (None, "skipped:repo_unresolved")
 
 
 def test_missing_plugin_json_at_registry_path_is_skipped(tmp_path, monkeypatch):
@@ -130,7 +130,25 @@ def test_missing_plugin_json_at_registry_path_is_skipped(tmp_path, monkeypatch):
     registry = _registry_file(tmp_path, "test-marketplace", repo)
     monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", installed)
     monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", registry)
-    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped")
+    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped:repo_unresolved")
+
+
+def test_registry_path_with_mismatched_plugin_name_is_skipped(tmp_path, monkeypatch):
+    """The marketplace directory a registry entry points to can host a DIFFERENT
+    plugin — a registry hit only says "where the marketplace is", not "is this
+    the plugin". Must be rejected exactly like a walk-up name mismatch, not
+    trusted just because the registry named the directory."""
+    other_repo = tmp_path / "other-repo"
+    other_repo.mkdir()
+    (other_repo / ".claude-plugin").mkdir()
+    (other_repo / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "some-unrelated-plugin", "version": "9.9.9"}))
+    installed = _installed_plugins_file(tmp_path, KEY,
+                                         [{"version": "1.0.0", "gitCommitSha": "a" * 40}])
+    registry = _registry_file(tmp_path, "test-marketplace", other_repo)
+    monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", installed)
+    monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", registry)
+    assert cd.plugin_version_drift_context(_prompt()) == (None, "skipped:repo_unresolved")
 
 
 # ---------------- throttle: shares the pulse's cadence ----------------
@@ -188,7 +206,7 @@ def test_walkup_rejects_a_name_mismatched_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", tmp_path / "missing.json")
     nested = other_repo / "sub"
     nested.mkdir()
-    assert cd.plugin_version_drift_context(_prompt(cwd=nested)) == (None, "skipped")
+    assert cd.plugin_version_drift_context(_prompt(cwd=nested)) == (None, "skipped:repo_unresolved")
 
 
 # ---------------- comparison: gitCommitSha primary ----------------

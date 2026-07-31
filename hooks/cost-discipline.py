@@ -1539,24 +1539,40 @@ def _resolve_installed_plugin_record(plugin_name=PLUGIN_NAME):
     return None
 
 
+def _plugin_json_names(manifest_path, plugin_name):
+    """True iff `manifest_path` parses as JSON and its "name" matches
+    `plugin_name`. False on any read/parse failure or a mismatch — never
+    raises, never guesses."""
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except Exception:
+        return False
+    return manifest.get("name") == plugin_name
+
+
 def _resolve_repo_path(key, cwd):
     """Locate the git checkout the installed plugin `key` ("name@marketplace")
     was built from.
 
     Primary: known_marketplaces.json's directory-source entry for the
-    marketplace — the very record `claude plugin update` reads to find a
-    `-local` checkout, so it is authoritative and needs no re-verification.
-    This path is global: it runs the same regardless of the session's cwd.
+    marketplace. This authoritatively answers WHERE the marketplace lives —
+    it is the very record `claude plugin update` reads for a `-local`
+    checkout — but a marketplace can host more than one plugin, so the
+    directory it names is not automatically the plugin being asked about.
+    "Authoritative" describes the source of the location, not whether the
+    thing found there is the thing being looked for; that still needs the
+    same name-match verification as the fallback below. This path is global:
+    it runs the same regardless of the session's cwd.
 
-    Fallback: walk up from `cwd` looking for `.claude-plugin/plugin.json` whose
-    "name" matches the plugin. `cwd` is genuine session data (the hook's own
-    payload), and the name match is a VERIFICATION of whatever is found, not an
-    assumption about directory structure — a mismatched manifest is rejected,
-    not accepted just because something was there. Coverage on this path is
-    limited to sessions whose cwd sits inside the repo; that gap belongs to the
-    fallback only — the registry path above has none.
+    Fallback: walk up from `cwd` looking for `.claude-plugin/plugin.json`
+    whose "name" matches the plugin. `cwd` is genuine session data (the
+    hook's own payload). Coverage on this path is limited to sessions whose
+    cwd sits inside the repo; that gap belongs to the fallback only — the
+    registry path above has none.
 
-    Returns None — never a guessed path — if neither locates it.
+    Both paths reject a found manifest that names a different plugin rather
+    than accepting it just because something was there. Returns None — never
+    a guessed path — if neither locates a verified match.
     """
     plugin_name = key.split("@", 1)[0]
     marketplace = key.split("@", 1)[1] if "@" in key else None
@@ -1566,7 +1582,8 @@ def _resolve_repo_path(key, cwd):
             source = (registry.get(marketplace) or {}).get("source") or {}
             if source.get("source") == "directory" and source.get("path"):
                 candidate = Path(source["path"])
-                if (candidate / ".claude-plugin" / "plugin.json").is_file():
+                manifest_path = candidate / ".claude-plugin" / "plugin.json"
+                if manifest_path.is_file() and _plugin_json_names(manifest_path, plugin_name):
                     return candidate
         except Exception:
             pass  # no usable registry entry — fall through to the walk-up
@@ -1574,13 +1591,7 @@ def _resolve_repo_path(key, cwd):
     if cwd:
         for parent in [Path(cwd), *Path(cwd).parents]:
             manifest_path = parent / ".claude-plugin" / "plugin.json"
-            if not manifest_path.is_file():
-                continue
-            try:
-                manifest = json.loads(manifest_path.read_text())
-            except Exception:
-                continue
-            if manifest.get("name") == plugin_name:
+            if manifest_path.is_file() and _plugin_json_names(manifest_path, plugin_name):
                 return parent
     return None
 
@@ -1588,7 +1599,7 @@ def _resolve_repo_path(key, cwd):
 def _git_head_sha(repo_path):
     try:
         out = subprocess.run(["git", "-C", str(repo_path), "rev-parse", "HEAD"],
-                             capture_output=True, text=True, timeout=5)
+                             capture_output=True, text=True, timeout=HYGIENE_GIT_TIMEOUT)
         if out.returncode == 0:
             return out.stdout.strip()
     except Exception:
@@ -1602,12 +1613,12 @@ def _commits_behind(repo_path, old_sha, new_sha):
     try:
         anc = subprocess.run(
             ["git", "-C", str(repo_path), "merge-base", "--is-ancestor", old_sha, new_sha],
-            capture_output=True, timeout=5)
+            capture_output=True, timeout=HYGIENE_GIT_TIMEOUT)
         if anc.returncode != 0:
             return None
         cnt = subprocess.run(
             ["git", "-C", str(repo_path), "rev-list", "--count", f"{old_sha}..{new_sha}"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True, text=True, timeout=HYGIENE_GIT_TIMEOUT)
         if cnt.returncode == 0:
             return int(cnt.stdout.strip())
     except Exception:
@@ -1619,7 +1630,11 @@ def plugin_version_drift_context(state):
     """(advisory_or_None, outcome) comparing the installed claude-core-hooks copy
     against the repository it was built from.
 
-    Outcomes: 'skipped' / 'in_sync' / 'drifted'. Shares the pulse's throttle.
+    Outcomes: 'in_sync' / 'drifted' / one of four 'skipped:<reason>' values
+    ('not_installed', 'repo_unresolved', 'manifest_unreadable',
+    'missing_version') — a flat 'skipped' cannot tell "not installed under
+    this name" apart from "found the repo but its manifest won't parse", and
+    the remedies for each differ completely. Shares the pulse's throttle.
     Advisory only — drift never blocks work.
 
     THREE states exist, not two: the repository, the on-disk installed copy,
@@ -1654,22 +1669,22 @@ def plugin_version_drift_context(state):
 
     found = _resolve_installed_plugin_record()
     if found is None:
-        return (None, "skipped")
+        return (None, "skipped:not_installed")
     key, record = found
 
     repo_path = _resolve_repo_path(key, state.get("cwd"))
     if repo_path is None:
-        return (None, "skipped")
+        return (None, "skipped:repo_unresolved")
 
     try:
         manifest = json.loads((repo_path / ".claude-plugin" / "plugin.json").read_text())
     except Exception:
-        return (None, "skipped")
+        return (None, "skipped:manifest_unreadable")
 
     repo_version = manifest.get("version")
     installed_version = record.get("version")
     if not repo_version or not installed_version:
-        return (None, "skipped")
+        return (None, "skipped:missing_version")
 
     installed_sha = record.get("gitCommitSha")
     repo_sha = _git_head_sha(repo_path) if installed_sha else None
