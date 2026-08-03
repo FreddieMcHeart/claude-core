@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.12.1 (2026-08-03)
+
+### Bug Fixes
+
+- **delegation-discipline**: The aggregate tier has no write escape
+  ([#46](https://github.com/FreddieMcHeart/claude-core/pull/46),
+  [`eaf666c`](https://github.com/FreddieMcHeart/claude-core/commit/eaf666cd21cfe16af26a5d4227237031b6959d3c))
+
+
 ## v0.12.0 (2026-07-31)
 
 ### Bug Fixes
