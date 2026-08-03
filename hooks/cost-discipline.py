@@ -957,19 +957,34 @@ def is_ls_find_as_glob(cmd):
     return False
 
 
+_BASH_SEGMENT_SPLIT_RE = re.compile(r"&&|;|\|")
+
+_ENV_PREFIX = r"(?:\w+=\S+\s+)*"
+_GIT_GLOBAL_OPTS = r"(?:-C\s+\S+\s+|-c\s+\S+\s+)*"
+
 _BASH_WRITE_PATTERNS = (
-    # git: mutating subcommands — log/diff/status/show/blame are reads, stay uncaught
-    re.compile(r"^git\s+(commit|push|merge|rebase|reset|cherry-pick|revert|tag|"
-               r"stash\s+(pop|drop|apply)|worktree\s+(add|remove|prune)|"
-               r"branch\s+-[dD]|clean)\b"),
-    # gh: create/merge/close/comment/edit/reopen mutate — view/diff/list/status stay reads
-    re.compile(r"^gh\s+(pr|issue|release)\s+(create|merge|close|comment|edit|reopen)\b"),
+    # git: mutating subcommands — log/diff/status/show/blame are reads, stay
+    # uncaught. Allows -C/-c global options and env=val prefixes ahead of the
+    # subcommand, and requires a real stash/branch argument so `stash list`/
+    # `stash show` and a bare `branch` (listing) stay reads.
+    re.compile(r"^" + _ENV_PREFIX + r"git\s+" + _GIT_GLOBAL_OPTS +
+               r"(commit|push|merge|rebase|reset|cherry-pick|revert|tag|"
+               r"stash\b(?!\s+(?:list|show)\b)|"
+               r"worktree\s+(add|remove|prune)|"
+               r"branch\s+(?:-[dD]\b|(?!-)\S+)|"
+               r"clean)\b"),
+    # gh: create/merge/close/comment/edit/reopen mutate — view/diff/list/status
+    # stay reads. `gh api`/`gh workflow run` deliberately excluded: arbitrary
+    # API/workflow dispatch is a different, unbounded population, not one of
+    # the reported CLIs.
+    re.compile(r"^" + _ENV_PREFIX + r"gh\s+(pr|issue|release)\s+"
+               r"(create|merge|close|comment|edit|reopen)\b"),
     # downbeat relay: send/reply/ack/register/rebind mutate shared state —
     # inbox/peers/whoami stay reads
-    re.compile(r"^downbeat\s+(send|reply|ack|register|rebind|quarantine|drain|"
-               r"reconcile|gc-stale|gc-markers|migrate)\b"),
+    re.compile(r"^" + _ENV_PREFIX + r"downbeat\s+(send|reply|ack|register|rebind|"
+               r"quarantine|drain|reconcile|gc-stale|gc-markers|migrate)\b"),
     # claude plugin: install/update/uninstall mutate the local install
-    re.compile(r"^claude\s+plugin\s+(install|update|uninstall)\b"),
+    re.compile(r"^" + _ENV_PREFIX + r"claude\s+plugin\s+(install|update|uninstall)\b"),
 )
 
 
@@ -980,14 +995,26 @@ def is_bash_write_command(cmd):
     `downbeat reply`, `claude plugin update` (2026-08-03, two sessions, one day) —
     extend the pattern list for another CLI if it starts happening there too.
 
+    The verb is matched at the START OF EACH SEGMENT, not just at cmd[0]: splits
+    on `&&`/`;`/`|` first, so `cd /x && git commit`, `git -C /x commit`, and
+    `GIT_AUTHOR_NAME=y git commit` all count — a leading `cd` or `git add` in an
+    earlier segment no longer shields a write verb in a later one. First cut only
+    matched cmd[0] and missed all three of those (10/24 misses on independent
+    review of #50, 0 false positives on the same 24-command table) — the fix is
+    on the axis the miss was actually on (position), not a longer CLI list
+    (name); the four CLIs were already covered and still missed.
+
     Defaults to False for anything unrecognized, same as before this function
     existed — the streak's job is catching Bash(cat)/Bash(ls) read substitutes, and
     a permissive "assume write" default would give that up. This only carves known
     writes OUT of the read count; it never adds to it."""
     if not cmd:
         return False
-    cmd = cmd.strip()
-    return any(p.match(cmd) for p in _BASH_WRITE_PATTERNS)
+    for segment in _BASH_SEGMENT_SPLIT_RE.split(cmd):
+        segment = segment.strip()
+        if segment and any(p.match(segment) for p in _BASH_WRITE_PATTERNS):
+            return True
+    return False
 
 
 # ---- Reader-reflex table (kubectl / pup / slack / gh) ----------------------------

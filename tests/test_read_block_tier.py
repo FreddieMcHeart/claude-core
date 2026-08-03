@@ -269,3 +269,43 @@ def test_unrecognized_bash_still_counts_toward_the_streak(monkeypatch, capsys):
     capsys.readouterr()
     assert saved["agent_counters"]["main"]["read_streak"] == 4, \
         "gh pr diff is a read, not a write, and must still count"
+
+
+def test_bash_write_matcher_catches_compound_and_flagged_forms():
+    """Independent review of #50 (2026-08-03) ran the first cut of
+    is_bash_write_command against 24 real command strings and found 10 misses,
+    0 false positives — cmd[0] was checked, but the write verb wasn't there. A
+    leading `cd <path> &&`, `git -C <path>`, `git -c k=v`, or a leading VAR=val
+    env assignment all shielded it. Pinned directly against the function (the
+    population the review actually exercised) rather than via handle_pre_tool."""
+    for cmd in (
+        "cd /Users/x/.claude && git commit -q -F -",
+        "cd /Users/x/.claude && git push",
+        "git add CLAUDE.md && git commit -m x",
+        "git -C /Users/x/.claude commit -m x",
+        "git -C /Users/x/.claude push",
+        "GIT_AUTHOR_NAME=x git commit -m y",
+        "git stash",
+        "git branch feat/x",
+    ):
+        assert cd.is_bash_write_command(cmd) is True, \
+            f"{cmd!r} is a write and the matcher must see it regardless of position"
+
+
+def test_bash_write_matcher_stays_bounded_to_the_reported_clis():
+    """`gh api`/`gh workflow run` are deliberately NOT covered — arbitrary
+    API/workflow dispatch is a different, unbounded population than the four
+    reported CLIs. And the positional fix must not turn genuine reads (branch
+    listing, stash list/show) into false positives — the review found 0 false
+    positives on its 24-command table and this must stay that way."""
+    for cmd in (
+        "gh api -X POST repos/o/r/issues",
+        "gh workflow run ci.yaml",
+        "git branch",
+        "git branch -a",
+        "git stash list",
+        "git stash show",
+        "git log --oneline -5",
+        "gh pr diff 48",
+    ):
+        assert cd.is_bash_write_command(cmd) is False, f"{cmd!r} must stay a read"
