@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.13.0 (2026-08-03)
+
+### Features
+
+- **hook**: Publish a main-scope read count for the statusline HUD
+  ([#49](https://github.com/FreddieMcHeart/claude-core/pull/49),
+  [`354fda7`](https://github.com/FreddieMcHeart/claude-core/commit/354fda725ee193c9679d31096ef9560fd348436d))
+
+
 ## v0.12.2 (2026-08-03)
 
 ### Bug Fixes
