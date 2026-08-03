@@ -238,6 +238,41 @@ def test_sha_mismatch_reports_drift_with_commit_distance(tmp_path, monkeypatch):
     assert new_sha != old_sha
 
 
+def test_the_remedy_command_is_marketplace_qualified(tmp_path, monkeypatch):
+    """The emitted `claude plugin update …` must name `plugin@marketplace`.
+
+    The bare plugin name is REJECTED by the CLI — measured 2026-08-03:
+
+        $ claude plugin update claude-core-hooks
+        ✘ Failed to update plugin "claude-core-hooks": Plugin "…" not found
+        $ claude plugin update claude-core-hooks@claude-core-local
+        ✔ updated from 0.11.7 to 0.12.1
+
+    So the first version of this advisory printed a command that could not
+    work: the check fired correctly, named a real problem, and handed over a
+    remedy that fails. A nudge whose only actionable line is broken is worse
+    than no nudge, because the reader concludes the diagnosis was wrong.
+
+    The assertion carries the CLOSING BACKTICK on purpose. Without it this
+    test cannot fail on the old code — `claude plugin update <name>@<market>`
+    contains `claude plugin update <name>` as a substring, so a naive `in`
+    check passes either way. The backtick is what makes the bare form and the
+    qualified form distinguishable.
+    """
+    repo = _repo(tmp_path)
+    _commit_plugin_json(repo, "1.0.0")
+    _commit_plugin_json(repo, "1.0.1")
+    installed = _installed_plugins_file(tmp_path, KEY, [{"version": "1.0.0"}])
+    registry = _registry_file(tmp_path, "test-marketplace", repo)
+    monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", installed)
+    monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", registry)
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "@" in KEY, "fixture must use a qualified key or this proves nothing"
+    assert f"`claude plugin update {KEY}`" in msg
+    assert f"`claude plugin update {cd.PLUGIN_NAME}`" not in msg
+
+
 def test_diverged_commit_is_drifted_without_a_false_distance_claim(tmp_path, monkeypatch):
     """installed_sha is NOT an ancestor of repo HEAD (e.g. history rewritten) —
     must report drift honestly without claiming a specific commit distance."""

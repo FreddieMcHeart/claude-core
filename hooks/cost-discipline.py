@@ -1708,7 +1708,15 @@ def plugin_version_drift_context(state):
         f"Compared via {signal}. Two states checked: repository vs. on-disk "
         f"installed copy — NOT the copy the currently-running process is "
         f"serving (`claude plugin update` needs a restart to apply). Run "
-        f"`claude plugin update {PLUGIN_NAME}` and restart the session.",
+        # The MARKETPLACE-QUALIFIED key, not PLUGIN_NAME. The bare name is
+        # rejected — `claude plugin update claude-core-hooks` exits with
+        # `Plugin "claude-core-hooks" not found`, while
+        # `claude plugin update claude-core-hooks@claude-core-local` succeeds
+        # (measured 2026-08-03, 0.11.7 -> 0.12.1). `key` already carries the
+        # `name@marketplace` form from the install record, so this needs no
+        # extra lookup. The prose above deliberately keeps the bare name: it
+        # reads better, and it is not something anyone pastes.
+        f"`claude plugin update {key}` and restart the session.",
         "drifted",
     )
 
