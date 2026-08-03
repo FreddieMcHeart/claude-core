@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.12.2 (2026-08-03)
+
+### Bug Fixes
+
+- **hook**: The drift nudge printed a command that cannot work
+  ([#48](https://github.com/FreddieMcHeart/claude-core/pull/48),
+  [`6337045`](https://github.com/FreddieMcHeart/claude-core/commit/6337045b92a8dba75f5303a370e6f0851332a260))
+
+### Documentation
+
+- Describe the wiki mount by layout instead of asserting a submodule
+  ([#47](https://github.com/FreddieMcHeart/claude-core/pull/47),
+  [`8b5338e`](https://github.com/FreddieMcHeart/claude-core/commit/8b5338ef1fcd3f9fbec755d9a43f9a46e53590de))
+
+
 ## v0.12.1 (2026-08-03)
 
 ### Bug Fixes
