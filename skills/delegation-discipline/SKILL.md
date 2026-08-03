@@ -77,7 +77,42 @@ The 4-consecutive-read rule and this ceiling answer **different questions**. Rea
 
 "I could finish this in a handful of tool calls" is a reason to keep the *work* in main — and simultaneously a reason the streak rule still prices those calls, because inline reads on an expensive main are exactly what it exists to catch. The ceiling governs fan-out width; it never raises the streak floor.
 
-**When both fire, take the streak rule's other branch.** Say you need five reads to land one edit. At read 4 the streak rule demands *delegate or write something concrete*, and the ceiling says don't delegate this. So write: make the edit you have been gathering context for, then continue reading if you still need to. "Neither" is not on the menu — between them the two rules always leave exactly one action available, never zero. If you find yourself concluding that both rules block you, you have mistaken the ceiling for a licence to keep reading.
+**When both fire, take the streak rule's other branch — but only the streak tier
+accepts it.** Say you need five reads to land one edit. At read 4 the streak rule
+demands *delegate or write something concrete*, and the ceiling says don't
+delegate this. So write: make the edit you have been gathering context for, then
+continue reading. If you conclude that both rules block you at this tier, you
+have mistaken the ceiling for a licence to keep reading.
+
+**That escape does not exist at the session tier, and this file claimed it did.**
+The enforcing hook has two independent blocks with different reset semantics, and
+a write clears only one of them:
+
+| tier | fires at | reset by write? | reset by dispatch? | reset by `/clear`? |
+|---|---|---|---|---|
+| streak (`STREAK_BLOCK_THRESHOLD`) | 10 consecutive inline reads | **yes** | yes | yes |
+| session aggregate (`AGGREGATE_BLOCK_THRESHOLD`) | 40 inline reads in the session | **no** | yes | yes |
+
+The hook says so in the message it prints when the aggregate tier fires: *"A
+write does NOT reset the session aggregate — only a dispatch or /clear does."* So
+"write something concrete" — the remedy this section named — is **inert against
+the aggregate block**. Take it and the next read is refused again, with the
+counter unchanged.
+
+Before the 2026-07-31 standing grant that made read-and-analysis dispatch
+freely available, this composed into a genuine dead end: aggregate blocking,
+write inert, dispatch read as forbidden by the ceiling above, and only `/clear`
+left — which is destructive, not a remedy. Zero non-destructive actions, not one.
+**The grant is what restores the exit, so the ceiling must never be read as
+forbidding a dispatch that a block has just demanded.** The ceiling governs how
+WIDE you fan out on work you chose to delegate; it has nothing to say about a
+single scout dispatched to clear a block.
+
+*Why this correction is in the file rather than in a commit message:* the old
+sentence was a confident universal — "always ... never zero" — asserted over two
+mechanisms after checking one. A rule that names an escape the enforcing code
+does not honour is worse than a rule with no escape, because it sends the reader
+to the one door that is painted on.
 
 ## Common mistakes
 
