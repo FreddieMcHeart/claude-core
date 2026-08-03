@@ -55,7 +55,7 @@ overall health.
 - `bootstrap.sh` — symlink the skills above into `~/.claude/skills` on a fresh
   machine.
 - `doctor.sh` — health check: hook registration (hand-merged or plugin), plugin
-  detection, wiki submodule presence.
+  detection, wiki mount presence and currency.
 
 ## Releases
 
@@ -64,8 +64,9 @@ from conventional commits (`feat:`/`fix:` trigger a release, `docs:`/`chore:`/`c
 do not) — see [CHANGELOG.md](./CHANGELOG.md) for the full history. Every release
 creates a GitHub Release and syncs `.claude-plugin/plugin.json`'s version.
 
-Companion: `claude-core-wiki` (methodology notes, mounted as a `docs/core`
-submodule in any Obsidian vault).
+Companion: `claude-core-wiki` (methodology notes, mounted at `docs/core` in any
+Obsidian vault — as a submodule, a plain clone, or a symlink to your working copy;
+`install.sh` accepts all three).
 
 ## Contributing
 
