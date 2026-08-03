@@ -55,24 +55,36 @@ that feel light-touch in the moment.
   the admin bypass, but broke from the PR-based workflow used for every other change this
   repo has seen (PR #3, #5, #6, #7). Bypass rights existing is not the same as bypass being
   the intended path.
-- **`claude-core-wiki` has two independent checkouts on this machine — edit only
-  `~/dev/claude-core-wiki`, never `~/dev/claude-core/docs/core` directly, and MUST
-  sync the mirror as the LAST step of every wiki edit, in the same turn, unprompted.**
-  The submodule mount at `docs/core/` and the standalone clone at `~/dev/claude-core-wiki`
-  are separate `git` working copies of the same remote
-  (`github.com/FreddieMcHeart/claude-core-wiki`). `~/dev/claude-core-wiki` has a real
-  `.obsidian/` and is the vault actually opened in the Obsidian app — it is the one true
-  working copy. `docs/core/` is a read-only mirror.
+- **`claude-core-wiki` is mounted inside this repo at `docs/core/`, and the mount's LAYOUT
+  decides whether a sync step exists at all. Establish the layout before acting — do not
+  assume it.** Edit only `~/dev/claude-core-wiki`; treat `docs/core/` as read-only either
+  way. `~/dev/claude-core-wiki` holds the real `.obsidian/` and is the vault actually opened
+  in the Obsidian app — it is the one true working copy under both layouts.
 
-  **Required sequence for every `claude-core-wiki` change, no exceptions:**
-  1. Edit + commit + push from `~/dev/claude-core-wiki` only.
-  2. Immediately: `cd ~/dev/claude-core/docs/core && git pull origin main -q`.
-  3. Confirm both `git log -1 --oneline` outputs match before considering the task done.
+  Check with `ls -ld docs/core`. Two layouts are supported and `install.sh` accepts both:
 
-  Step 2 is not optional and not something to do "if there's time" — a wiki task that
-  ends after step 1 is incomplete. Editing the submodule copy instead of the standalone
-  clone silently desyncs from what's visible in Obsidian — confirmed 2026-07-10, cost a
-  whole debugging detour before being caught. Also: before any `git add -A` in
+  - **Symlink** — `docs/core -> /Users/…/dev/claude-core-wiki`. **This is the layout on this
+    machine** (created 2026-07-30). There is ONE working copy, not two: nothing to sync, and
+    nothing that can desync. Beware that `git -C docs/core <cmd>` here operates on the
+    canonical clone — `git -C docs/core checkout <sha>` detaches the vault's own HEAD, which
+    is a live way to do damage while believing you are updating a mirror (done 2026-08-03,
+    caught and reverted).
+  - **Separate checkout** (submodule, or a plain clone of the same remote). Only then are
+    they independent working copies, and the mirror MUST be pulled as the LAST step of every
+    wiki edit, in the same turn, unprompted:
+    1. Edit + commit + push from `~/dev/claude-core-wiki` only.
+    2. Immediately: `git -C ~/dev/claude-core/docs/core pull origin main -q`.
+    3. Confirm both `git log -1 --oneline` outputs match before considering the task done.
+
+    Step 2 is not optional there — a wiki task that ends after step 1 is incomplete, and
+    editing the mirror instead of the standalone clone silently desyncs from what Obsidian
+    shows (confirmed 2026-07-10, cost a whole debugging detour before being caught).
+
+  Note that `git submodule status` cannot answer "is it mounted?" — this repo declares no
+  `.gitmodules` and `.gitignore` excludes `/docs/core`, so the registration is local-only
+  and routinely absent. Ask the filesystem, as `install.sh` and `doctor.sh` both do.
+
+  Also: before any `git add -A` in
   `claude-core-wiki`, check `git status --short` for unexpected files first — untracked
   Obsidian app-state (`.obsidian/*.json` besides `community-plugins.json`,
   `Untitled*.canvas`) should never be committed; the same incident swept some of that in

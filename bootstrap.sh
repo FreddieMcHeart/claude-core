@@ -28,4 +28,4 @@ for c in harvest; do
   ln -s "$target" "$link"; echo "linked command /$c"
 done
 
-echo "done. Next: (1) run 'claude plugin marketplace add <this-repo> && claude plugin install claude-core-hooks@claude-core-local' to register cost-discipline hooks; (2) add claude-core-wiki as a docs/core submodule; (3) run 'downbeat init' for relay; (4) copy harvest.config.json.example to ~/.claude/harvest.config.json and set seedsDir for the harvest skill."
+echo "done. Next: (1) run 'claude plugin marketplace add <this-repo> && claude plugin install claude-core-hooks@claude-core-local' to register cost-discipline hooks; (2) mount claude-core-wiki at docs/core (submodule, plain clone, or symlink — run ./install.sh); (3) run 'downbeat init' for relay; (4) copy harvest.config.json.example to ~/.claude/harvest.config.json and set seedsDir for the harvest skill."
