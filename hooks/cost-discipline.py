@@ -957,6 +957,39 @@ def is_ls_find_as_glob(cmd):
     return False
 
 
+_BASH_WRITE_PATTERNS = (
+    # git: mutating subcommands — log/diff/status/show/blame are reads, stay uncaught
+    re.compile(r"^git\s+(commit|push|merge|rebase|reset|cherry-pick|revert|tag|"
+               r"stash\s+(pop|drop|apply)|worktree\s+(add|remove|prune)|"
+               r"branch\s+-[dD]|clean)\b"),
+    # gh: create/merge/close/comment/edit/reopen mutate — view/diff/list/status stay reads
+    re.compile(r"^gh\s+(pr|issue|release)\s+(create|merge|close|comment|edit|reopen)\b"),
+    # downbeat relay: send/reply/ack/register/rebind mutate shared state —
+    # inbox/peers/whoami stay reads
+    re.compile(r"^downbeat\s+(send|reply|ack|register|rebind|quarantine|drain|"
+               r"reconcile|gc-stale|gc-markers|migrate)\b"),
+    # claude plugin: install/update/uninstall mutate the local install
+    re.compile(r"^claude\s+plugin\s+(install|update|uninstall)\b"),
+)
+
+
+def is_bash_write_command(cmd):
+    """True for a Bash command matching a known git/gh/downbeat/claude-plugin
+    mutating verb, rather than a read. Scope is the four tool families with a
+    REPORTED miscount instance — `git worktree remove`, `gh pr create`,
+    `downbeat reply`, `claude plugin update` (2026-08-03, two sessions, one day) —
+    extend the pattern list for another CLI if it starts happening there too.
+
+    Defaults to False for anything unrecognized, same as before this function
+    existed — the streak's job is catching Bash(cat)/Bash(ls) read substitutes, and
+    a permissive "assume write" default would give that up. This only carves known
+    writes OUT of the read count; it never adds to it."""
+    if not cmd:
+        return False
+    cmd = cmd.strip()
+    return any(p.match(cmd) for p in _BASH_WRITE_PATTERNS)
+
+
 # ---- Reader-reflex table (kubectl / pup / slack / gh) ----------------------------
 # The four inline-read nudges share one shape: STOP-nudge on first hit, then count
 # repeats and escalate at the 3rd. Texts are verbatim from the pre-refactor blocks;
@@ -1956,7 +1989,13 @@ def handle_pre_tool(payload):
             "(or /rlm) instead of continuing inline.")
 
     # ---------- Aggregate / streak (read-only mechanical tools) ----------
-    if tool_name in READ_TOOLS:
+    # A Bash call matching a known write verb (git push/commit, gh pr create,
+    # downbeat reply, claude plugin update, ...) takes the `else` reset path below
+    # instead of counting — it did real work, the same as an Edit/Write call would
+    # have. See is_bash_write_command's docstring for the reported instances and why
+    # the default stays False (content-blind) for anything it doesn't recognize.
+    _bash_write = tool_name == "Bash" and is_bash_write_command(tool_input.get("command") or "")
+    if tool_name in READ_TOOLS and not _bash_write:
         # Count PROSPECTIVELY and commit only if the call is let through. A blocked
         # call never runs, so counting it made the counter measure work that did not
         # happen — and each retry pushed it further over, which is why the block

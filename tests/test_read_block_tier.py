@@ -203,18 +203,69 @@ def test_subagent_exemption_keys_on_the_payload_not_the_background_job_signal(mo
     ) is False, "a real sub-agent call is exempt in the foreground too"
 
 
-def test_bash_counts_toward_the_streak_content_blind(monkeypatch, capsys):
-    """Also reported and deliberately NOT changed yet. `Bash` is in READ_TOOLS and
-    the increment inspects no command text, so `git commit` counts as a read. The
-    two available fixes both cost something — classifying command content is a
-    fresh unknown-to-permissive default, and dropping Bash from the streak gives up
-    the `Bash(cat)`/`Bash(ls)` case the streak was written for — so it needs its own
-    decision. Pinned so the current behaviour is explicit, not assumed.
-    """
+def test_known_bash_writes_reset_the_streak_instead_of_counting(monkeypatch, capsys):
+    """Fixed 2026-08-03. `Bash` is in READ_TOOLS and the increment used to inspect no
+    command text, so `git commit`, `gh pr create`, `downbeat reply`, and `claude
+    plugin update` each counted as a read — four reported instances across two
+    sessions in one day. `is_bash_write_command` carves known git/gh/downbeat/
+    claude-plugin mutating verbs out of the read count; they now take the same
+    streak-reset path an Edit/Write call would."""
     _armed(monkeypatch)
+    for cmd in (
+        "git commit -m x",
+        "git push",
+        "git worktree remove /tmp/pr48-verify --force",
+        'gh pr create --title x --body y',
+        "downbeat reply e8b3dd1af912 hello",
+        "claude plugin update claude-core-hooks@claude-core-local",
+    ):
+        saved = _state(monkeypatch, read_streak=1)
+        cd.handle_pre_tool({"session_id": "s1", "tool_name": "Bash",
+                            "tool_input": {"command": cmd}})
+        capsys.readouterr()
+        assert saved["agent_counters"]["main"]["read_streak"] == 0, \
+            f"{cmd!r} is a known write and must reset, not advance, the streak"
+
+
+def test_known_bash_writes_do_not_touch_the_aggregate(monkeypatch, capsys):
+    """Mirrors test_a_write_resets_the_streak_but_not_the_aggregate for the Bash
+    case: a recognized write resets read_streak but must not move agent_reads or
+    the flat aggregate_reads ledger — those only move on an actual read."""
+    _armed(monkeypatch)
+    saved = _state(monkeypatch, read_streak=3, agent_reads=10, aggregate_reads=10)
+    cd.handle_pre_tool({"session_id": "s1", "tool_name": "Bash",
+                        "tool_input": {"command": "gh pr create --title x --body y"}})
+    capsys.readouterr()
+    assert saved["agent_counters"]["main"]["read_streak"] == 0
+    assert saved["agent_counters"]["main"]["agent_reads"] == 10
+    assert saved["aggregate_reads"] == 10
+
+
+def test_unrecognized_bash_still_counts_toward_the_streak(monkeypatch, capsys):
+    """The fix must stay content-blind for anything it doesn't recognize as a known
+    write — that default is what preserves the Bash(cat)/Bash(ls) read-substitute
+    case the streak was written for in the first place."""
+    _armed(monkeypatch)
+    # Not `cat lib/config_loader.py`: that specific command is intercepted by the
+    # separate cat-as-Read block tier (see test_cat_as_read_block_does_not_advertise
+    # _the_override above) and returns before ever reaching the streak counter —
+    # asserting a streak advance on it would test the wrong code path.
     saved = _state(monkeypatch, read_streak=1)
     cd.handle_pre_tool({"session_id": "s1", "tool_name": "Bash",
-                        "tool_input": {"command": "git commit -m x"}})
+                        "tool_input": {"command": "ls -la"}})
     capsys.readouterr()
-    assert saved["agent_counters"]["main"]["read_streak"] == 2, \
-        "an outbound git write currently counts as a read"
+    assert saved["agent_counters"]["main"]["read_streak"] == 2
+
+    saved = _state(monkeypatch, read_streak=2)
+    cd.handle_pre_tool({"session_id": "s1", "tool_name": "Bash",
+                        "tool_input": {"command": "git log --oneline -5"}})
+    capsys.readouterr()
+    assert saved["agent_counters"]["main"]["read_streak"] == 3, \
+        "git log is a read, not a write, and must still count"
+
+    saved = _state(monkeypatch, read_streak=3)
+    cd.handle_pre_tool({"session_id": "s1", "tool_name": "Bash",
+                        "tool_input": {"command": "gh pr diff 48"}})
+    capsys.readouterr()
+    assert saved["agent_counters"]["main"]["read_streak"] == 4, \
+        "gh pr diff is a read, not a write, and must still count"
