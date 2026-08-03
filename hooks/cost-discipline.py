@@ -569,6 +569,34 @@ def scan_agent_models():
 
 
 def save_state(state):
+    # ---- Published view for external consumers (the statusline HUD) ----
+    #
+    # `aggregate_reads` counts EVERY inline read in the session, including a
+    # sub-agent's — sub-agents share their dispatcher's session_id, so their
+    # calls land in the same flat counter. The HUD read that field, so
+    # dispatching a scout made the displayed pressure go UP. The gauge moved
+    # against the one action the discipline exists to encourage, which is worse
+    # than no gauge: it argued for the opposite of the rule it was showing.
+    #
+    # `main_agent_reads` is the main scope's own count, and the name says whose
+    # it is so nobody has to infer the scope from a bare number again.
+    #
+    # DERIVED here rather than incremented alongside the counters it summarises.
+    # A second increment site is a second thing that has to stay in step, and
+    # the reason this field exists at all is that a consumer was reading a
+    # number that meant something other than it appeared to. Recomputing from
+    # the authoritative counter on every write makes divergence unrepresentable
+    # instead of merely unlikely.
+    #
+    # `aggregate_threshold` is published because the HUD had the constant
+    # hardcoded in two places. A duplicated constant does not fail when it
+    # drifts — it just quietly displays a ratio against a limit that is no
+    # longer the limit.
+    state["main_agent_reads"] = (
+        ((state.get("agent_counters") or {}).get("main") or {}).get("agent_reads", 0)
+    )
+    state["aggregate_threshold"] = AGGREGATE_THRESHOLD
+
     p = state_path(state["session_id"])
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(state, indent=2))
