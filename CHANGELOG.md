@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.13.1 (2026-08-04)
+
+### Bug Fixes
+
+- Bash writes no longer count toward the read-discipline streak
+  ([#50](https://github.com/FreddieMcHeart/claude-core/pull/50),
+  [`e2af37c`](https://github.com/FreddieMcHeart/claude-core/commit/e2af37c6c54dc5cfd8ddf5405413f4a484abedc1))
+
+
 ## v0.13.0 (2026-08-03)
 
 ### Features
