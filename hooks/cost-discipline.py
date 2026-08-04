@@ -967,8 +967,27 @@ _BASH_WRITE_PATTERNS = (
     # uncaught. Allows -C/-c global options and env=val prefixes ahead of the
     # subcommand, and requires a real stash/branch argument so `stash list`/
     # `stash show` and a bare `branch` (listing) stay reads.
+    #
+    # The index/tree/ref group was missing until 2026-08-04, and `add` was the
+    # instance that showed it: `cd <repo> && git add -- <paths>` classified as a
+    # READ and, on a session already at the aggregate threshold, the hook blocked
+    # the staging step of a commit. Measured by running this function against the
+    # refused command string, not inferred from the block message.
+    #
+    # It survived #50's own review for an instructive reason: that PR's write table
+    # contains "git add CLAUDE.md && git commit -m x", which passes on the `commit`
+    # segment. A case that exercises the verb you care about only incidentally reads
+    # as coverage and is none — so each verb below is asserted on its own.
+    #
+    # Scoped by the PROPERTY (mutates repository state), not by the one instance
+    # that was caught. Dry-run forms (`git add -n`, `git apply --check`) are
+    # deliberately NOT carved out: over-classifying a read as a write only means it
+    # stops counting toward the read cap, while under-classifying a write produces a
+    # false block on a call the agent must make. The costly direction is the one
+    # this commit removes.
     re.compile(r"^" + _ENV_PREFIX + r"git\s+" + _GIT_GLOBAL_OPTS +
                r"(commit|push|merge|rebase|reset|cherry-pick|revert|tag|"
+               r"add|rm|mv|apply|restore|switch|checkout|fetch|pull|clone|init|"
                r"stash\b(?!\s+(?:list|show)\b)|"
                r"worktree\s+(add|remove|prune)|"
                r"branch\s+(?:-[dD]\b|(?!-)\S+)|"
