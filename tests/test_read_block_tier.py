@@ -309,3 +309,55 @@ def test_bash_write_matcher_stays_bounded_to_the_reported_clis():
         "gh pr diff 48",
     ):
         assert cd.is_bash_write_command(cmd) is False, f"{cmd!r} must stay a read"
+
+
+def test_bash_write_matcher_catches_index_and_tree_mutations():
+    """The verb list shipped without the index/tree/ref group, and `git add` is
+    what exposed it (2026-08-04): `cd <repo> && git add -- <paths>` classified as
+    a read and, on a session already at the aggregate threshold, the hook blocked
+    the staging step of a commit. Measured by calling this function on the refused
+    string rather than reasoning from the block message.
+
+    Why it survived #50's review is the part worth pinning: that PR's write table
+    already contains `git add CLAUDE.md && git commit -m x`, which passes on the
+    `commit` segment. A string that exercises the verb you care about only
+    incidentally reads as coverage and is none. So every verb here is asserted
+    alone, with nothing else on the line that could carry the assertion."""
+    for cmd in (
+        "git add -- foo.txt",
+        "cd /Users/x/.claude && git add -- a.py b.py",
+        "git rm --cached foo.txt",
+        "git mv a.txt b.txt",
+        "git apply /tmp/p.patch",
+        "git restore --staged foo.txt",
+        "git switch main",
+        "git checkout -b feat/x origin/main",
+        "git fetch origin",
+        "git pull --rebase",
+        "git clone git@github.com:o/r.git",
+        "git init",
+        "git -C /Users/x/.claude add -A",
+        "GIT_AUTHOR_NAME=x git checkout main",
+    ):
+        assert cd.is_bash_write_command(cmd) is True, \
+            f"{cmd!r} mutates repository state and must not count toward the read cap"
+
+
+def test_index_and_tree_verbs_do_not_swallow_neighbouring_reads():
+    """The new verbs sit in one alternation with the old ones, so the risk they
+    introduce is a prefix collision turning a read into a write — `rm` against
+    `remote`, `checkout` against `check-ignore`, `clone` against `clean`. Asserted
+    rather than reasoned about, because a false positive here silently weakens the
+    read cap and produces no visible symptom at all."""
+    for cmd in (
+        "git remote -v",
+        "git check-ignore -v foo",
+        "git rev-parse --short HEAD",
+        "git ls-files",
+        "git show HEAD",
+        "git describe --tags",
+        "git diff --cached --stat",
+        "git status --porcelain",
+    ):
+        assert cd.is_bash_write_command(cmd) is False, \
+            f"{cmd!r} is a read and must stay one"
