@@ -111,6 +111,39 @@ WIKI_MAX_DANGLING = 0     # any dangling row is a defect; raise only for a delib
 WIKI_SAMPLE_COUNT = 3     # how many dangling rows to name in the nudge
 WIKI_INDEX_CAP = 24       # index files inspected per scan — a bound, and it is REPORTED when hit
 
+# ---- Read-before-work (2026-08-04) ----
+# Writing to the vault has an external trigger — the operator says "write this down".
+# Reading it has none: it is entirely the agent's own initiative. Measured across two
+# vaults on 2026-08-04, under the one predicate that needs no heuristics and is identical
+# in both harnesses (Read tool vs Write+Edit): 3.58 writes per deliberate read in one,
+# 4.05 in the other. Within 13% of each other, so the asymmetry is a property of the
+# mechanism rather than of either vault.
+#
+# The fix is NOT a prose rule saying "consult the wiki first". This repo already documents
+# why: the read floor is enforced by a hook that hard-blocks, the over-delegation ceiling
+# is prose, and the audit's own finding is that the one with teeth works and the one
+# without does not. A rule that fires only when the agent remembers to consult it has the
+# same defect as a check with no failing input.
+#
+# So this arrives BEFORE the decision, unprompted, naming the exact path — which is the
+# property the prose lacks, and is deliberately NOT called enforcement. It cannot block:
+# blocking a user's prompt would be hostile and UserPromptSubmit is the wrong place for a
+# gate. What it changes is WHEN the knowledge arrives, which is the whole of the argument
+# in the cloud-auth precedent: knowledge must load before the decision; enforcement only
+# fires on the attempt.
+WORKSTREAM_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{2,6})\b")
+# Prefixes that are never ticket keys. This list is an OPTIMISATION, not the filter — the
+# real filter is that a key with no page produces silence, so a novel false positive costs
+# one bounded scan and says nothing. Keeping the list short on purpose: a long denylist
+# would start suppressing real project prefixes nobody remembered to check.
+WORKSTREAM_KEY_DENY = frozenset({
+    "UTF", "SHA", "AES", "RSA", "ISO", "RFC", "GPT", "HTTP", "IPV", "SSE", "TLS", "SSL",
+    "MD", "CVE", "UTC", "ASCII", "BASE",
+})
+WORKSTREAM_MAX_KEYS = 3    # keys acted on per prompt — a bound, and it is REPORTED when hit
+WORKSTREAM_SAMPLE = 2      # pages named per key
+WIKI_READ_PATHS_CAP = 200  # bound on the per-session record of which vault paths were read
+
 # ---- Dated claims (2026-07-27) ----
 # Some statements in this repo are true on a date and false afterwards, and they
 # decay SILENTLY: nothing raises, no test fails, the prose just stops being true.
@@ -500,6 +533,13 @@ def new_state(session_id):
         "dispatches_blocked_no_model": 0,
         "agent_models": {},
         "wiki_read_count": 0,
+        "wiki_paths_read": [],       # read-before-work: WHICH vault paths were opened, not
+                                     # just how many times. The count alone cannot answer
+                                     # "did you open the page for THIS ticket", which is the
+                                     # only question the advisory needs. Bounded by
+                                     # WIKI_READ_PATHS_CAP.
+        "workstream_keys_fired": [], # read-before-work: keys already advised on this session,
+                                     # so the nudge fires once per key rather than per prompt
         "mech_bash_on_opus_streak": 0,
         "repo_roots_seen": [],   # Layer 3: distinct "<group>/<repo>" roots read inline
         "rlm_active": False,     # Layer 3 suppressor: a Workflow dispatch happened (NEW-2)
@@ -1560,6 +1600,147 @@ def wiki_index_context(state):
     )
 
 
+def workstream_keys(prompt):
+    """Ticket-shaped keys in the prompt, deduped, in order, bounded.
+
+    Returns (keys, truncated_count). The bound is REPORTED by the caller when hit,
+    because a silently truncated list is a coverage claim nobody can check.
+    """
+    seen = []
+    for m in WORKSTREAM_KEY_RE.finditer(prompt or ""):
+        if m.group(1) in WORKSTREAM_KEY_DENY:
+            continue
+        if m.group(0) not in seen:
+            seen.append(m.group(0))
+    return seen[:WORKSTREAM_MAX_KEYS], max(0, len(seen) - WORKSTREAM_MAX_KEYS)
+
+
+def workstream_page_scan(keys, repo=None):
+    """{key: [vault paths naming it]} for keys that have a page, or None if we COULD NOT LOOK.
+
+    None and {} are different answers and the caller must keep them apart: {} means the
+    vault was searched and holds nothing for these keys, None means no search happened —
+    path absent, not a git repo, git missing or too slow, no commits. Reporting the second
+    as the first is a check that never looked reporting a result.
+
+    Two matchers, because pages are named by topic far more often than by ticket:
+      1. the key appears in a tracked filename;
+      2. the key appears on a row of a committed `_index.md`, whose wikilink target is
+         then the page. This is the higher-recall half and it is why the index convention
+         earns its keep.
+
+    Read from HEAD rather than from the worktree, for the same reason wiki_index_scan is:
+    a page that exists only on this machine is not a page a fresh clone can open, and the
+    advisory would be pointing at something that is not there for anyone else.
+    """
+    repo = WIKI_DIR if repo is None else Path(repo)
+    if not keys or not repo.is_dir():
+        return None
+
+    def git(*args):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                capture_output=True, text=True, errors="surrogateescape",
+                timeout=HYGIENE_GIT_TIMEOUT,
+            )
+        except Exception:
+            return None
+        return proc.stdout if proc.returncode == 0 else None
+
+    listing = git("ls-tree", "-r", "HEAD", "--name-only", "-z")
+    if listing is None:
+        return None
+    tracked = [p for p in listing.split("\0") if p.endswith(".md")]
+    if not tracked:
+        return None
+
+    index_paths = sorted(p for p in tracked if p.rsplit("/", 1)[-1] in WIKI_INDEX_NAMES)
+    index_text = []
+    for path in index_paths[:WIKI_INDEX_CAP]:
+        content = git("show", f"HEAD:{path}")
+        if content is not None:
+            index_text.append(content)
+
+    hits = {}
+    lowered = [(p, p.lower()) for p in tracked]
+    for key in keys:
+        kl = key.lower()
+        found = [p for p, pl in lowered if kl in pl]
+        for content in index_text:
+            for line in content.splitlines():
+                if kl not in line.lower():
+                    continue
+                m = _WIKILINK_RE.search(line)
+                if not m:
+                    continue
+                target = m.group(1).split("|", 1)[0].split("#", 1)[0].strip()
+                if target and "://" not in target and target not in found:
+                    found.append(target if target.endswith(".md") else target + ".md")
+        if found:
+            hits[key] = found[:WORKSTREAM_SAMPLE]
+    return hits
+
+
+def workstream_page_context(state, prompt):
+    """(advisory_or_None, outcome) for the read-before-work check.
+
+    Fires when the prompt names a workstream that HAS a committed vault page which this
+    session has not opened. Once per key per session, not once per prompt — the trigger is
+    content, not a counter, so a prompt-interval throttle would either nag or miss.
+
+    `outcome` is logged on every run that had a key to act on, including the silent ones
+    (`no-page`, `opened`, `already-advised`, `skipped`), because a check that only speaks
+    when it finds something is indistinguishable from one that was never wired up. When the
+    prompt names no key at all, nothing ran and the outcome is None — that is a third
+    state, and calling it "clean" would be the vacuity this repo has a page about.
+    """
+    keys, truncated = workstream_keys(prompt)
+    if not keys:
+        return (None, None)
+
+    fired = state.setdefault("workstream_keys_fired", [])
+    fresh = [k for k in keys if k not in fired]
+    if not fresh:
+        return (None, "already-advised")
+
+    hits = workstream_page_scan(fresh)
+    if hits is None:
+        return (None, "skipped")
+
+    # A key is "advised on" once we have LOOKED for it, whatever the answer. Marking only
+    # the ones that produced a message would re-scan every prompt for a key with no page —
+    # the common case — and the scan is the expensive half.
+    fired.extend(fresh)
+    del fired[:-50]
+    try:
+        save_state(state)
+    except Exception:
+        pass  # the advisory is still correct for this prompt; only the once-per-key is lost
+
+    read = state.get("wiki_paths_read") or []
+    unopened = {}
+    for key, paths in hits.items():
+        not_read = [p for p in paths if not any(r.endswith(p) for r in read)]
+        if not_read:
+            unopened[key] = not_read
+    if not unopened:
+        return (None, "opened" if hits else "no-page")
+
+    listed = "; ".join(
+        f"**{key}** → {', '.join(paths)}" for key, paths in sorted(unopened.items())
+    )
+    tail = f" ({truncated} further key(s) in this prompt not checked)" if truncated else ""
+    return (
+        f"**Read before work** — this prompt names a workstream the vault already has a page "
+        f"for, and this session has not opened it: {listed}. Open it before deciding anything; "
+        f"it holds the prior state of exactly this work.{tail}\n\n"
+        f"Not a gate — nothing is blocked. It arrives now because the decision it informs "
+        f"happens before anyone thinks to consult a wiki.",
+        "unopened",
+    )
+
+
 def _claim_status(claim, today):
     """('expired'|'due'|'current'|'malformed', days) for one dated claim.
 
@@ -1869,7 +2050,12 @@ def handle_user_prompt_submit(payload):
          are true until a date and decay silently after it.
       4. plugin version drift — same throttle; the installed claude-core-hooks
          copy vs. the repository it was built from.
-      5. Layer 2 cross-repo rlm-fanout suggestion.
+      5. read-before-work — NOT throttled by prompt count. Fires when the prompt
+         names a workstream key that has a committed vault page this session has
+         not opened, once per key. The trigger is content rather than a counter,
+         because a prompt-interval throttle would either nag or miss the one
+         prompt that mattered — the first one about that workstream.
+      6. Layer 2 cross-repo rlm-fanout suggestion.
 
     This handler now writes state (the hygiene pulse needs a prompt counter),
     which the Layer-2 path previously did not. Fail-open throughout.
@@ -1938,6 +2124,18 @@ def handle_user_prompt_submit(payload):
                 )
         except Exception:
             pass  # ditto — its own handler, for the same reason as the others
+        try:
+            ws, outcome = workstream_page_context(state, prompt)
+            if ws:
+                parts.append(ws)
+            if outcome:
+                log_fire(
+                    "workstream_page", session_id,
+                    "warn" if outcome == "unopened" else "info",
+                    outcome=outcome,
+                )
+        except Exception:
+            pass  # ditto — a vault lookup is never worth a broken prompt
 
     rlm = rlm_fanout_context(prompt)
     if rlm:
@@ -2005,14 +2203,27 @@ def handle_pre_tool(payload):
     # the 2026-05-12 retrospective. Counts any tool call referencing
     # the configured wiki path (_WIKI_PATH) — Read, Grep, Glob, or Bash (command-string match).
     _wiki_path_hit = False
+    _wiki_read_target = ""
     if tool_name == "Read":
-        _wiki_path_hit = (_WIKI_PATH + "/") in (tool_input.get("file_path") or "")
+        _wiki_read_target = tool_input.get("file_path") or ""
+        _wiki_path_hit = (_WIKI_PATH + "/") in _wiki_read_target
     elif tool_name in ("Grep", "Glob"):
         _wiki_path_hit = (_WIKI_PATH + "/") in (tool_input.get("path") or "")
     elif tool_name == "Bash":
         _wiki_path_hit = _WIKI_PATH in (tool_input.get("command") or "")
     if _wiki_path_hit:
         state["wiki_read_count"] = state.get("wiki_read_count", 0) + 1
+        # Record the path only for `Read`, deliberately. A Grep or a Bash sweep across the
+        # vault is not "you opened the page for this ticket" — it is the read-to-consult
+        # versus read-in-order-to-edit distinction that neither of the 2026-08-04
+        # measurements could make, and counting a sweep as having consulted a page would
+        # let the advisory be silenced by an operation that read nothing in particular.
+        # Under-crediting is the safe direction here: the cost is one extra nudge.
+        if tool_name == "Read" and _wiki_read_target:
+            _seen = state.setdefault("wiki_paths_read", [])
+            if _wiki_read_target not in _seen:
+                _seen.append(_wiki_read_target)
+                del _seen[:-WIKI_READ_PATHS_CAP]
 
     # ---------- Layer 3: cross-repo inline-drift catch-net (C3) ----------
     _root = None
