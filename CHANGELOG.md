@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.13.2 (2026-08-04)
+
+### Bug Fixes
+
+- Git index, tree and ref mutations no longer count as reads
+  ([#51](https://github.com/FreddieMcHeart/claude-core/pull/51),
+  [`39434d6`](https://github.com/FreddieMcHeart/claude-core/commit/39434d6efb982a1104e5dfdbd451af50c929e02a))
+
+
 ## v0.13.1 (2026-08-04)
 
 ### Bug Fixes
