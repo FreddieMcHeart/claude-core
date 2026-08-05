@@ -1817,9 +1817,12 @@ def workstream_page_context(state, prompt):
 
     `outcome` is logged on every run that had a key to act on, including the silent
     ones (`no-page`, `no-page-partial`, `opened`, `already-advised`, `skipped`,
-    `scan-budget-spent`), because a check that only speaks when it finds something is
-    indistinguishable from one that was never wired up. When the prompt names no key
-    at all, nothing ran and the outcome is None — a third state, and calling it
+    `scan-budget-spent`, `unopened`, `unopened-partial`), because a check that only
+    speaks when it finds something is indistinguishable from one that was never wired
+    up. `unopened-partial` is `unopened` with the same advisory but an incomplete
+    index scan behind it — the fire log needs to tell "advised, and the search was
+    whole" apart from "advised, and the search was partial". When the prompt names no
+    key at all, nothing ran and the outcome is None — a third state, and calling it
     "clean" would be the vacuity this repo has a page about.
     """
     settled = state.setdefault("workstream_keys_fired", [])
@@ -1884,17 +1887,21 @@ def workstream_page_context(state, prompt):
             unopened[key] = not_read[:WORKSTREAM_SAMPLE]
 
     if not unopened:
-        if scan["truncated_indexes"] and not hits:
+        if scan["truncated_indexes"]:
             # The scan did not finish enumerating the population it would need to claim
             # "no page exists" — the higher-recall (index) half was cut short by
-            # WIKI_INDEX_CAP, not merely thin. Settling here would make an absence claim
-            # over an incomplete search permanent for the session. Note `truncated_keys`
-            # does NOT feed this: it says other keys in the prompt went unchecked, not
-            # that the vault enumeration for THESE keys was partial, and treating it as
-            # incomplete-too would mean a prompt naming several keys never settles any of
-            # them — the next prompt re-selects the same keys and the scan budget burns
-            # down without ever reaching a verdict. The qualified outcome follows the
-            # sibling vocabulary (`skipped`).
+            # WIKI_INDEX_CAP, not merely thin. This is BATCH-level, not per-key: a key
+            # that already has a hit (and so isn't in `unopened`) may still have
+            # index-only pages the truncated half never read, so its page list is
+            # unproven too — "opened" is exactly as unsupported a claim as "no-page"
+            # here. One rule, no per-key carve-out for keys with a hit. Note
+            # `truncated_keys` does NOT feed this: it says other keys in the prompt
+            # went unchecked, not that the vault enumeration for THESE keys was
+            # partial, and treating it as incomplete-too would mean a prompt naming
+            # several keys never settles any of them — the next prompt re-selects the
+            # same keys and the scan budget burns down without ever reaching a verdict.
+            # No advisory is produced on this branch either way, so both the no-hits
+            # and the already-read-hit case collapse into the same qualified outcome.
             return (None, "no-page-partial")
         # Settled: nothing more to say about these keys this session.
         _mark(fresh)
@@ -1905,7 +1912,18 @@ def workstream_page_context(state, prompt):
     # would burn the key on a message that may never arrive — losing precisely the first
     # prompt about that workstream, which is the one this check exists for. It re-fires
     # until the page is actually opened, which also silences it.
-    _mark([k for k in fresh if k not in unopened])
+    if scan["truncated_indexes"]:
+        # Same reasoning as the no-advisory branch above, extended to the keys that DID
+        # settle there before this fix: a truncated index enumeration means the page
+        # list for those keys is unproven too, so `_mark` must not run for them either.
+        # The advisory below still fires — a partial scan that found something real is
+        # more useful than silence — but the outcome is tagged so a fire-log reader can
+        # tell "advised, and the search was whole" from "advised, and the search was
+        # partial".
+        outcome = "unopened-partial"
+    else:
+        _mark([k for k in fresh if k not in unopened])
+        outcome = "unopened"
 
     listed = "; ".join(
         f"**{key}** → {', '.join(paths)}" for key, paths in sorted(unopened.items())
@@ -1924,7 +1942,7 @@ def workstream_page_context(state, prompt):
         f"it holds the prior state of exactly this work.{tail}\n\n"
         f"Not a gate — nothing is blocked. It arrives now because the decision it informs "
         f"happens before anyone thinks to consult a wiki.",
-        "unopened",
+        outcome,
     )
 
 

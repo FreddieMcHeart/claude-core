@@ -280,6 +280,106 @@ def test_an_incomplete_scan_is_not_reported_as_no_page(live, monkeypatch):
     assert "INE-857" not in st["workstream_keys_fired"], "an incomplete scan must not settle"
 
 
+def test_a_hit_elsewhere_in_the_batch_does_not_mask_a_truncated_key(live, monkeypatch):
+    """Fix round 1's guard (`scan["truncated_indexes"] and not hits`) is BATCH-level
+    while settling is PER-KEY. WORKSTREAM_MAX_KEYS is 3, so two+ keys sharing one scan
+    is the ordinary case, not a corner: PLAT-3113 matches by filename (unaffected by
+    the index cap) and INE-857 is reachable ONLY through the vault's `_index.md` row.
+    When the index half of the scan is truncated, INE-857 has no hit at all — but
+    PLAT-3113 does, so `hits` is non-empty, the batch-level `not hits` guard never
+    fires, and INE-857 used to be silently settled forever under an outcome that never
+    named it.
+
+    CONTROL arm (index cap at its normal value): both keys get a hit, both are named
+    in the message, neither settles (unopened keys are never settled). TRUNCATED arm
+    (cap 0): INE-857 has no hit and is not named — and must still not settle, because
+    the fix gates settling on the scan's completeness, not on which keys in the batch
+    happened to have a hit.
+    """
+    st_control = _state()
+    msg, outcome = cd.workstream_page_context(st_control, "PLAT-3113 and INE-857")
+    assert outcome == "unopened"
+    assert "PLAT-3113" in msg and "INE-857" in msg
+    assert "INE-857" not in st_control["workstream_keys_fired"]
+    assert "PLAT-3113" not in st_control["workstream_keys_fired"]
+
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    st_trunc = _state()
+    msg2, outcome2 = cd.workstream_page_context(st_trunc, "PLAT-3113 and INE-857")
+    assert outcome2 == "unopened-partial"
+    assert "PLAT-3113" in msg2
+    assert "INE-857" not in msg2, "the truncated scan never found INE-857, so it cannot be named"
+    assert "INE-857" not in st_trunc["workstream_keys_fired"], \
+        "a truncated scan must not settle a key just because a batch-mate had a hit"
+    assert "PLAT-3113" not in st_trunc["workstream_keys_fired"], \
+        "unopened keys are never settled, truncated or not"
+
+    assert (msg, outcome) != (msg2, outcome2), \
+        "control and truncated arms must diverge, or this proves nothing about truncation"
+
+
+def test_a_truncated_scan_does_not_settle_an_already_opened_hit_either(live, monkeypatch):
+    """Branch-A ('not unopened') used to gate on `truncated_indexes and not hits` —
+    batch-level on `hits` — so a key whose one known page was already read this
+    session sailed straight through as 'opened' and got settled, even though the
+    truncated index half might hold an index-only page for that SAME key that was
+    never seen. The ruling: a truncated enumeration is partial for every key in the
+    batch, including ones with a hit — no per-key carve-out.
+
+    CONTROL (index cap normal): PLAT-3113's one known page is already read -> 'opened',
+    settled. TRUNCATED (cap 0): same key, same already-read page, but the index half of
+    the scan never ran -> must NOT settle, and 'opened' is not a claim the code can
+    support with an unproven page list.
+    """
+    read = ["brain/proj/PLAT-3113-rtbf-migration.md"]
+
+    st_control = _state(wiki_paths_read=list(read))
+    assert cd.workstream_page_context(st_control, "PLAT-3113") == (None, "opened")
+    assert "PLAT-3113" in st_control["workstream_keys_fired"]
+
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    st_trunc = _state(wiki_paths_read=list(read))
+    msg, outcome = cd.workstream_page_context(st_trunc, "PLAT-3113")
+    assert outcome == "no-page-partial"
+    assert msg is None
+    assert "PLAT-3113" not in st_trunc["workstream_keys_fired"]
+
+
+def test_a_truncated_scan_does_not_settle_an_already_opened_key_on_the_message_path(
+    live, vault, monkeypatch,
+):
+    """Site 2 (`_mark([k for k in fresh if k not in unopened])`, the message-path
+    settle) has the same batch-level blindness as site 1: it used to settle every key
+    NOT in `unopened` without checking whether the scan behind `unopened` was itself
+    complete. PLAT-3113's one known page is already read, so it is never added to
+    `unopened` — and used to be settled here even when a second key in the same batch
+    was still unopened and the scan was truncated.
+
+    ZQ-77 is a second filename-matched key added directly to the vault: unaffected by
+    the index cap, so it stays unopened (and the message still fires) in BOTH arms —
+    isolating the truncation's effect to the settling decision, not to whether a
+    message is produced at all.
+    """
+    (vault / "brain" / "proj" / "ZQ-77-notes.md").write_text("# zq\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "second page")
+    read = ["brain/proj/PLAT-3113-rtbf-migration.md"]
+
+    st_control = _state(wiki_paths_read=list(read))
+    msg, outcome = cd.workstream_page_context(st_control, "PLAT-3113 and ZQ-77")
+    assert outcome == "unopened"
+    assert "ZQ-77" in msg
+    assert "PLAT-3113" in st_control["workstream_keys_fired"]
+
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    st_trunc = _state(wiki_paths_read=list(read))
+    msg2, outcome2 = cd.workstream_page_context(st_trunc, "PLAT-3113 and ZQ-77")
+    assert outcome2 == "unopened-partial"
+    assert "ZQ-77" in msg2
+    assert "PLAT-3113" not in st_trunc["workstream_keys_fired"], \
+        "a truncated scan must not settle a key just because its only known page was already read"
+
+
 def test_no_key_in_prompt_is_a_third_state_not_clean(live):
     assert cd.workstream_page_context(_state(), "just fix the typo") == (None, None)
 
