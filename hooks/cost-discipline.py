@@ -1680,10 +1680,15 @@ def workstream_keys(prompt, exclude=()):
 
 
 def workstream_page_scan(keys, repo=None):
-    """{"hits": {key: [paths]}, "truncated_indexes": n, "truncated_pages": n}, or None.
+    """{"hits": {key: [all resolved paths]}, "truncated_indexes": n}, or None.
+
+    `hits` is NOT truncated here. The caller filters out pages this session already
+    opened, and sampling before that filter let two already-read pages consume both
+    slots and hide the unread one — the check silenced by the pages the agent happened
+    to open first.
 
     None means we COULD NOT LOOK; an empty `hits` means we looked and the vault holds
-    nothing for these keys. The two bounds are RETURNED rather than applied silently,
+    nothing for these keys. The index bound is RETURNED rather than applied silently,
     matching WIKI_INDEX_CAP's own comment in this file — a truncated result that reports
     nothing is indistinguishable from "there is no page".
 
@@ -1761,7 +1766,7 @@ def workstream_page_scan(keys, repo=None):
             return None
         return stems.get(target)
 
-    hits, sample_truncated = {}, 0
+    hits = {}
     for key in keys:
         kl = re.escape(key.lower())
         # Bounded on both sides: a bare substring made `PLAT-311` match
@@ -1799,10 +1804,8 @@ def workstream_page_scan(keys, repo=None):
                 if resolved and resolved not in found:
                     found.append(resolved)
         if found:
-            sample_truncated += max(0, len(found) - WORKSTREAM_SAMPLE)
-            hits[key] = found[:WORKSTREAM_SAMPLE]
-    return {"hits": hits, "truncated_indexes": truncated_indexes,
-            "truncated_pages": sample_truncated}
+            hits[key] = found
+    return {"hits": hits, "truncated_indexes": truncated_indexes}
 
 
 def workstream_page_context(state, prompt):
@@ -1865,14 +1868,19 @@ def workstream_page_context(state, prompt):
 
     hits = scan["hits"]
     read = state.get("wiki_paths_read") or []
-    unopened = {}
+    unopened, truncated_pages = {}, 0
     for key, paths in hits.items():
         # Anchored: bare endswith matched across a path boundary, so a Read of
         # `snapshot.md` credited `hot.md` as opened and silenced the advisory with no
         # trace. That is the over-crediting direction, which this check must not have.
         not_read = [p for p in paths if not any(r == p or r.endswith("/" + p) for r in read)]
         if not_read:
-            unopened[key] = not_read
+            # Sampled HERE, after the already-read filter, not in the scan. Sampling
+            # before that filter let already-read pages consume the sample budget and
+            # hide the one page that still mattered — see workstream_page_scan's
+            # docstring for the reproduction.
+            truncated_pages += max(0, len(not_read) - WORKSTREAM_SAMPLE)
+            unopened[key] = not_read[:WORKSTREAM_SAMPLE]
 
     if not unopened:
         # Settled: nothing more to say about these keys this session.
@@ -1894,8 +1902,8 @@ def workstream_page_context(state, prompt):
         caveats.append(f"{truncated_keys} further key(s) in this prompt not checked")
     if scan["truncated_indexes"]:
         caveats.append(f"{scan['truncated_indexes']} index file(s) not inspected")
-    if scan["truncated_pages"]:
-        caveats.append(f"{scan['truncated_pages']} further page(s) not listed")
+    if truncated_pages:
+        caveats.append(f"{truncated_pages} further page(s) not listed")
     tail = f" Incomplete coverage: {'; '.join(caveats)}." if caveats else ""
     return (
         f"**Read before work** — this prompt names a workstream the vault already has a page "

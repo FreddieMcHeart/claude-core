@@ -340,6 +340,26 @@ def test_truncation_is_reported_in_the_message(live, monkeypatch):
     assert "Incomplete coverage" in msg and "not checked" in msg
 
 
+def test_already_read_pages_do_not_consume_the_sample_budget(live, vault):
+    """Reproduced before the fix: three pages for one key, two already read, both
+    sample slots spent on them, and the third — the unread one — never named. The
+    check was silenced by the two pages the agent happened to open first.
+
+    Uses `ZQ-11` rather than the brief's literal `K-11`: a single-letter prefix is
+    deliberately not a key (test_single_letter_prefix_is_not_a_key, same file) so
+    `K-11` never reaches workstream_page_scan at all — it fails at key extraction,
+    not at the sample bound this test exists to cover. `ZQ` is a two-letter prefix,
+    not in WORKSTREAM_KEY_DENY, and unused by any other fixture in this file."""
+    for name in ("ZQ-11-aaa", "ZQ-11-bbb", "ZQ-11-ccc"):
+        (vault / "brain" / "proj" / f"{name}.md").write_text("x")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "three pages")
+    st = _state(wiki_paths_read=["brain/proj/ZQ-11-aaa.md", "brain/proj/ZQ-11-bbb.md"])
+    msg, outcome = cd.workstream_page_context(st, "ZQ-11")
+    assert outcome == "unopened"
+    assert "brain/proj/ZQ-11-ccc.md" in msg
+
+
 def test_state_is_persisted_against_the_freshest_copy(live):
     """The mark re-loads before writing. Writing back the pre-scan snapshot would revert
     every counter a sub-agent advanced during the scan window — sub-agents share this
