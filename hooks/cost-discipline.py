@@ -1815,11 +1815,12 @@ def workstream_page_context(state, prompt):
     session has not opened. Once per key per session, not once per prompt — the trigger is
     content, not a counter, so a prompt-interval throttle would either nag or miss.
 
-    `outcome` is logged on every run that had a key to act on, including the silent ones
-    (`no-page`, `opened`, `already-advised`, `skipped`), because a check that only speaks
-    when it finds something is indistinguishable from one that was never wired up. When the
-    prompt names no key at all, nothing ran and the outcome is None — that is a third
-    state, and calling it "clean" would be the vacuity this repo has a page about.
+    `outcome` is logged on every run that had a key to act on, including the silent
+    ones (`no-page`, `no-page-partial`, `opened`, `already-advised`, `skipped`,
+    `scan-budget-spent`), because a check that only speaks when it finds something is
+    indistinguishable from one that was never wired up. When the prompt names no key
+    at all, nothing ran and the outcome is None — a third state, and calling it
+    "clean" would be the vacuity this repo has a page about.
     """
     settled = state.setdefault("workstream_keys_fired", [])
     keys, truncated_keys = workstream_keys(prompt, exclude=settled)
@@ -1883,6 +1884,18 @@ def workstream_page_context(state, prompt):
             unopened[key] = not_read[:WORKSTREAM_SAMPLE]
 
     if not unopened:
+        if scan["truncated_indexes"] and not hits:
+            # The scan did not finish enumerating the population it would need to claim
+            # "no page exists" — the higher-recall (index) half was cut short by
+            # WIKI_INDEX_CAP, not merely thin. Settling here would make an absence claim
+            # over an incomplete search permanent for the session. Note `truncated_keys`
+            # does NOT feed this: it says other keys in the prompt went unchecked, not
+            # that the vault enumeration for THESE keys was partial, and treating it as
+            # incomplete-too would mean a prompt naming several keys never settles any of
+            # them — the next prompt re-selects the same keys and the scan budget burns
+            # down without ever reaching a verdict. The qualified outcome follows the
+            # sibling vocabulary (`skipped`).
+            return (None, "no-page-partial")
         # Settled: nothing more to say about these keys this session.
         _mark(fresh)
         return (None, "opened" if hits else "no-page")

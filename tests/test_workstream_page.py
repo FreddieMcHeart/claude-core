@@ -267,6 +267,19 @@ def test_silent_but_LOGGED_when_no_page_exists(live):
     assert cd.workstream_page_context(_state(), "look at ZZZ-999") == (None, "no-page")
 
 
+def test_an_incomplete_scan_is_not_reported_as_no_page(live, monkeypatch):
+    """Two reviewers found this independently. With the index cap at 0 the scan reads
+    no index file, so the higher-recall half never runs — yet the caller reported a
+    confident `no-page` AND settled the key, making the miss permanent for the
+    session. An absence claim over a population the code knows it did not enumerate."""
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    st = _state()
+    msg, outcome = cd.workstream_page_context(st, "INE-857")
+    assert outcome == "no-page-partial"
+    assert msg is None
+    assert "INE-857" not in st["workstream_keys_fired"], "an incomplete scan must not settle"
+
+
 def test_no_key_in_prompt_is_a_third_state_not_clean(live):
     assert cd.workstream_page_context(_state(), "just fix the typo") == (None, None)
 
