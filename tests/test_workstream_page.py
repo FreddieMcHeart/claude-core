@@ -74,7 +74,12 @@ def vault(tmp_path):
 
 @pytest.fixture
 def fired():
-    """Collects (rule, outcome) pairs instead of appending to the real fire log."""
+    """Collects (rule, outcome, severity) triples instead of appending to the real fire log.
+
+    Severity is log_fire's THIRD POSITIONAL argument. The first version of this stub swallowed
+    it in `*a` and recorded only (rule, outcome), which made the severity untestable — and a
+    stub that drops the field under test is how such a test looks green while asserting nothing.
+    """
     return []
 
 
@@ -92,7 +97,9 @@ def live(vault, monkeypatch, tmp_path, fired):
     monkeypatch.setattr(cd, "_WIKI_PATH", str(vault))
     monkeypatch.setattr(
         cd, "log_fire",
-        lambda rule, *a, **k: fired.append((rule, k.get("outcome"))),
+        lambda rule, *a, **k: fired.append(
+            (rule, k.get("outcome"), a[1] if len(a) > 1 else None)
+        ),
     )
     state_dir = tmp_path / "state"
     state_dir.mkdir()
@@ -555,4 +562,43 @@ def test_the_outcome_reaches_the_fire_log(live, fired):
     """Nothing asserted that the outcome was logged — the fire log is this check's
     only evidence channel, and ROADMAP.md calls it the one instrument we trust."""
     cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "work on PLAT-3113"})
-    assert ("workstream_page", "unopened") in fired
+    assert ("workstream_page", "unopened", "warn") in fired
+
+
+def _severity_for(fired):
+    """(outcome, severity) of the single workstream_page row, asserting there is exactly one.
+
+    The count assertion is load-bearing: an arm that logged twice, or not at all, would
+    otherwise be read through whichever row happened to be first.
+    """
+    rows = [r for r in fired if r[0] == "workstream_page"]
+    assert len(rows) == 1, f"expected exactly one row, got {rows}"
+    return rows[0][1], rows[0][2]
+
+
+def test_severity_marks_an_advisory_that_fired_whatever_the_outcome_is_called(
+    live, fired, monkeypatch
+):
+    """Three arms, because a one-armed version of this passes under a predicate that
+    returns "warn" unconditionally — a different bug wearing the same green.
+
+    The severity answers "was an advisory SHOWN", and it used to be decided by comparing
+    the outcome against the literal "unopened". When a truncated scan gained its own
+    outcome name, a fired advisory started logging at info: the behaviour was right and
+    the record of it was wrong, in a line the author of that change had no reason to open.
+    """
+    # Arm 1 — complete scan, advisory fires.
+    cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "work on PLAT-3113"})
+    assert _severity_for(fired) == ("unopened", "warn")
+
+    # Arm 2 — truncated scan, advisory still fires. Same event, different outcome name.
+    fired.clear()
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    cd.handle_user_prompt_submit({"session_id": "s2", "prompt": "work on PLAT-3113"})
+    assert _severity_for(fired) == ("unopened-partial", "warn")
+
+    # Arm 3 — truncated scan, nothing shown. The control: it must NOT be warn, or arms 1
+    # and 2 would pass under a predicate that never says info.
+    fired.clear()
+    cd.handle_user_prompt_submit({"session_id": "s3", "prompt": "work on ZZZ-999"})
+    assert _severity_for(fired) == ("no-page-partial", "info")

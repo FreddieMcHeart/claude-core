@@ -2334,9 +2334,14 @@ def handle_user_prompt_submit(payload):
             if ws:
                 parts.append(ws)
             if outcome:
+                # Severity asks whether an advisory was SHOWN, and `ws` answers that
+                # directly; an outcome name only correlates with it. Deliberately not the
+                # name comparison its three siblings above use — when this check gained
+                # `unopened-partial`, a fired advisory silently began logging at info,
+                # and nothing failed. Do not extend this predicate for a new outcome.
                 log_fire(
                     "workstream_page", session_id,
-                    "warn" if outcome == "unopened" else "info",
+                    "warn" if ws else "info",
                     outcome=outcome,
                 )
         except Exception:
