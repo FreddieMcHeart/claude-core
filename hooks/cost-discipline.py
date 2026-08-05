@@ -1738,13 +1738,39 @@ def workstream_page_scan(keys, repo=None):
     stems = {p[:-3].rsplit("/", 1)[-1]: p for p in tracked}
 
     index_paths = sorted(p for p in tracked if p.rsplit("/", 1)[-1] in WIKI_INDEX_NAMES)
-    index_text, unread = [], 0
+    index_rows, unread = [], 0
     for path in index_paths[:WIKI_INDEX_CAP]:
         content = git("show", f"HEAD:{path}")
         if content is None:
             unread += 1
             continue
-        index_text.append(content)
+        # Parsed ONCE per file rather than once per key: the strip, the split and the
+        # fence walk depend only on the content, and sitting inside `for key in keys`
+        # re-ran them WORKSTREAM_MAX_KEYS times against the same 2s budget.
+        body = _HTML_COMMENT_RE.sub("", content)
+        fence, marker = False, ""
+        for line in body.splitlines():
+            stripped = line.lstrip()
+            if fence:
+                if stripped.startswith(marker):
+                    fence, marker = False, ""
+                continue
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                fence, marker = True, stripped[:3]
+                continue
+            if not stripped.startswith("|"):
+                continue
+            cells = stripped.split("|")
+            first = cells[1] if len(cells) > 1 else ""
+            m = _WIKILINK_RE.search(_INLINE_CODE_RE.sub("", first))
+            if m:
+                index_rows.append((stripped.lower(), m.group(1)))
+        if fence:
+            # An unterminated fence means the rest of the file was skipped. Reporting
+            # it is the whole point: `_wikilinks_in` says "skipping the rest of the
+            # file would under-report — the permissive direction — and silence from a
+            # check that stopped reading is the failure this exists to avoid."
+            unread += 1
     truncated_indexes = max(0, len(index_paths) - WIKI_INDEX_CAP) + unread
 
     def _resolve(target):
@@ -1767,42 +1793,22 @@ def workstream_page_scan(keys, repo=None):
         return stems.get(target)
 
     hits = {}
+    lowered = [(p, p.lower()) for p in tracked]
     for key in keys:
         kl = re.escape(key.lower())
         # Bounded on both sides: a bare substring made `PLAT-311` match
         # `plat-3113-rtbf.md`, so a real key that is a numeric prefix of another real key
         # resolved to the wrong page and the advisory stated it as fact.
         key_re = re.compile(r"(?<![a-z0-9])" + kl + r"(?![a-z0-9])")
-        found = sorted(p for p in tracked if key_re.search(p.lower()))
-        for content in index_text:
-            # Strip what only LOOKS like a link before scanning, for the reason
-            # _wikilinks_in already documents in this file: an index documenting the link
-            # convention carries [[example]] inside a fence, and nudging about it trains
-            # the reader to ignore the nudge.
-            body = _HTML_COMMENT_RE.sub("", content)
-            fence, marker = False, ""
-            for line in body.splitlines():
-                stripped = line.lstrip()
-                if fence:
-                    if stripped.startswith(marker):
-                        fence, marker = False, ""
-                    continue
-                if stripped.startswith("```") or stripped.startswith("~~~"):
-                    fence, marker = True, stripped[:3]
-                    continue
-                # Table rows only, and the link is taken from the FIRST CELL. On a prose
-                # line "see [[a]] and [[b]] for KEY" the first wikilink is not the row's
-                # subject, and there is no row.
-                if not stripped.startswith("|") or not key_re.search(line.lower()):
-                    continue
-                cells = stripped.split("|")
-                first = cells[1] if len(cells) > 1 else ""
-                m = _WIKILINK_RE.search(_INLINE_CODE_RE.sub("", first))
-                if not m:
-                    continue
-                resolved = _resolve(m.group(1))
-                if resolved and resolved not in found:
-                    found.append(resolved)
+        found = sorted(p for p, pl in lowered if key_re.search(pl))
+        # `index_rows` was parsed once per file above (fence walk, first-cell wikilink);
+        # this is just the per-key filter over that pre-parsed set.
+        for row_lower, target in index_rows:
+            if not key_re.search(row_lower):
+                continue
+            resolved = _resolve(target)
+            if resolved and resolved not in found:
+                found.append(resolved)
         if found:
             hits[key] = found
     return {"hits": hits, "truncated_indexes": truncated_indexes}

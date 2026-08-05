@@ -241,6 +241,22 @@ def test_scan_reports_its_index_bound(vault, monkeypatch):
     assert cd.workstream_page_scan(["INE-857"], repo=vault)["truncated_indexes"] == 1
 
 
+def test_an_unterminated_fence_is_reported_not_swallowed(live, vault):
+    """`_wikilinks_in` in this same file returns its fence state and `wiki_index_scan`
+    records the path as unparsed; the copy here dropped that. Reproduced: a row below
+    an unterminated fence is invisible AND truncated_indexes stays 0, so a partial
+    read of one file reports full coverage."""
+    (vault / "brain" / "proj" / "broken.md").write_text("# broken\n")
+    (vault / "brain" / "fenced").mkdir(exist_ok=True)
+    (vault / "brain" / "fenced" / "_index.md").write_text(
+        "```\nnever closed\n\n| [[brain/proj/broken]] | LIVE-11 below the break |\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "unterminated fence")
+    scan = cd.workstream_page_scan(["LIVE-11"], repo=vault)
+    assert scan["hits"] == {}, "the row below the fence is not readable"
+    assert scan["truncated_indexes"] >= 1, "and the file must be counted as not fully read"
+
+
 def test_scan_bounds_total_subprocess_time_not_just_each_call(vault, monkeypatch):
     """A 24-file cap at 3s per call composed to a 75s worst case on the single event where
     latency is most visible. The deadline is aggregate."""
