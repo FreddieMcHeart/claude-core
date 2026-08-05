@@ -302,6 +302,17 @@ def test_scan_count_has_a_session_backstop(live):
     assert cd.workstream_page_context(st, "PLAT-3113")[1] == "scan-budget-spent"
 
 
+def test_settled_keys_do_not_consume_the_per_prompt_bound(live):
+    """Reproduced before the fix: a prompt naming four keys settles the first three,
+    and the fourth — which HAS a committed page — is unreachable for the rest of the
+    session, because the bound was applied before the settled-filter."""
+    st = _state(workstream_keys_fired=["AAA-11", "BBB-22", "CCC-33"])
+    keys, truncated = cd.workstream_keys(
+        "AAA-11 BBB-22 CCC-33 PLAT-3113", exclude=st["workstream_keys_fired"])
+    assert keys == ["PLAT-3113"]
+    assert truncated == 0
+
+
 def test_truncation_is_reported_in_the_message(live, monkeypatch):
     monkeypatch.setattr(cd, "WORKSTREAM_MAX_KEYS", 1)
     msg, outcome = cd.workstream_page_context(_state(), "PLAT-3113 and INE-857 and ZZZ-999")

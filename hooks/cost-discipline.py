@@ -1645,12 +1645,20 @@ def _vault_relative(path):
     return None
 
 
-def workstream_keys(prompt):
+def workstream_keys(prompt, exclude=()):
     """Ticket-shaped keys in the prompt, deduped, in order, bounded.
+
+    `exclude` holds keys already settled this session. They are skipped DURING
+    accumulation, not after, because the bound must apply to the keys that can still
+    be acted on. Reproduced before this argument existed: a prompt naming four keys
+    settled the first three on prompt 1, and the fourth — which had a committed page —
+    was unreachable for the rest of the session, since `workstream_keys` truncated to
+    three by appearance order and the caller filtered afterwards.
 
     Returns (keys, truncated_count). The bound is REPORTED by the caller when hit,
     because a silently truncated list is a coverage claim nobody can check.
     """
+    excluded = set(exclude)
     seen, order = set(), []
     for m in WORKSTREAM_KEY_RE.finditer(prompt or ""):
         # Strip trailing digits before the denylist lookup: the prefix of `SHA3-256` is
@@ -1659,7 +1667,7 @@ def workstream_keys(prompt):
         if m.group(1).rstrip("0123456789") in WORKSTREAM_KEY_DENY:
             continue
         key = m.group(0)
-        if key in seen:
+        if key in seen or key in excluded:
             continue
         seen.add(key)
         # Bounded DURING accumulation, not after. The first version appended to a list and
@@ -1810,16 +1818,16 @@ def workstream_page_context(state, prompt):
     prompt names no key at all, nothing ran and the outcome is None — that is a third
     state, and calling it "clean" would be the vacuity this repo has a page about.
     """
-    keys, truncated_keys = workstream_keys(prompt)
-    if not keys:
-        return (None, None)
-
     settled = state.setdefault("workstream_keys_fired", [])
-    fresh = [k for k in keys if k not in settled]
-    if not fresh:
-        return (None, "already-advised")
+    keys, truncated_keys = workstream_keys(prompt, exclude=settled)
+    if not keys:
+        # Either the prompt named no key at all, or every key it named is settled.
+        # Those are different states and only the second is worth logging.
+        return (None, "already-advised" if WORKSTREAM_KEY_RE.search(prompt or "") else None)
     if state.get("workstream_scans", 0) >= WORKSTREAM_MAX_SCANS:
         return (None, "scan-budget-spent")
+
+    fresh = keys
 
     scan = workstream_page_scan(fresh)
 
