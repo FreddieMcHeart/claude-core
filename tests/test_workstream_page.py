@@ -73,11 +73,27 @@ def vault(tmp_path):
 
 
 @pytest.fixture
-def live(vault, monkeypatch, tmp_path):
-    """Point the module at the fixture vault AND give it a real on-disk state dir, so
-    load_state/save_state round-trip through JSON instead of being stubbed away."""
+def fired():
+    """Collects (rule, outcome) pairs instead of appending to the real fire log."""
+    return []
+
+
+@pytest.fixture
+def live(vault, monkeypatch, tmp_path, fired):
+    """Point the module at the fixture vault, give it a real on-disk state dir so
+    load_state/save_state round-trip through JSON, and STUB log_fire.
+
+    Every sibling test file stubs log_fire; this one did not, so running pytest
+    appended rows with session_id "s1" to ~/.claude/state/cost-discipline-log.jsonl —
+    the instrument ROADMAP.md calls the only trustworthy number we have. A test suite
+    that writes into the gauge it is measuring is not a test suite.
+    """
     monkeypatch.setattr(cd, "WIKI_DIR", vault)
     monkeypatch.setattr(cd, "_WIKI_PATH", str(vault))
+    monkeypatch.setattr(
+        cd, "log_fire",
+        lambda rule, *a, **k: fired.append((rule, k.get("outcome"))),
+    )
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     monkeypatch.setattr(cd, "state_path", lambda sid: state_dir / f"{sid}.json")
@@ -369,3 +385,10 @@ def test_a_failing_scan_never_breaks_the_prompt(live, capsys, monkeypatch):
     cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "work on PLAT-3113"})
     out = capsys.readouterr().out.strip()
     assert "Read before work" not in out
+
+
+def test_the_outcome_reaches_the_fire_log(live, fired):
+    """Nothing asserted that the outcome was logged — the fire log is this check's
+    only evidence channel, and ROADMAP.md calls it the one instrument we trust."""
+    cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "work on PLAT-3113"})
+    assert ("workstream_page", "unopened") in fired
