@@ -313,6 +313,26 @@ def test_settled_keys_do_not_consume_the_per_prompt_bound(live):
     assert truncated == 0
 
 
+def test_denylisted_token_alone_is_no_key_not_already_advised(live):
+    """The 'no keys survived exclusion' branch used to decide already-advised-vs-nothing
+    with a raw WORKSTREAM_KEY_RE.search, which applies the shape test only and skips the
+    denylist workstream_keys applies. AES-256 is denylisted (SHA3-256, UTF-8, RFC-2119,
+    CVE-2021-4034 are the same class): a fresh session naming only it named no real
+    workstream key, so this must be silent and unlogged, not a false already-advised row
+    written to the fire log for a key nobody was ever advised on."""
+    assert cd.workstream_page_context(_state(), "explain AES-256 padding") == (None, None)
+
+
+def test_denylisted_token_plus_settled_key_still_reports_already_advised(live):
+    """The discriminating case: a denylisted token sits next to a real, already-settled
+    key in the same prompt. A fix that simply deleted the already-advised branch (instead
+    of re-deriving it from the denylist-aware extraction) would pass the test above alone
+    while silently losing this one — the settled key must still produce already-advised,
+    not None."""
+    st = _state(workstream_keys_fired=["PLAT-3113"])
+    assert cd.workstream_page_context(st, "AES-256 and PLAT-3113 again") == (None, "already-advised")
+
+
 def test_truncation_is_reported_in_the_message(live, monkeypatch):
     monkeypatch.setattr(cd, "WORKSTREAM_MAX_KEYS", 1)
     msg, outcome = cd.workstream_page_context(_state(), "PLAT-3113 and INE-857 and ZZZ-999")

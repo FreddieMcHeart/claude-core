@@ -1821,9 +1821,13 @@ def workstream_page_context(state, prompt):
     settled = state.setdefault("workstream_keys_fired", [])
     keys, truncated_keys = workstream_keys(prompt, exclude=settled)
     if not keys:
-        # Either the prompt named no key at all, or every key it named is settled.
-        # Those are different states and only the second is worth logging.
-        return (None, "already-advised" if WORKSTREAM_KEY_RE.search(prompt or "") else None)
+        # Either the prompt named no key at all, or every key it named is settled. Decide
+        # using the SAME denylist-aware extraction as everything else in this function,
+        # not a raw shape regex — a raw search matches denylisted prefixes too (AES-256,
+        # SHA3-256, RFC-2119, CVE-2021-4034), which reported "already-advised" for
+        # prompts that never named a real key at all.
+        all_keys, _ = workstream_keys(prompt)
+        return (None, "already-advised" if all_keys else None)
     if state.get("workstream_scans", 0) >= WORKSTREAM_MAX_SCANS:
         return (None, "scan-budget-spent")
 
