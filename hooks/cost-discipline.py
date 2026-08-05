@@ -131,18 +131,38 @@ WIKI_INDEX_CAP = 24       # index files inspected per scan — a bound, and it i
 # gate. What it changes is WHEN the knowledge arrives, which is the whole of the argument
 # in the cloud-auth precedent: knowledge must load before the decision; enforcement only
 # fires on the attempt.
-WORKSTREAM_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{2,6})\b")
+# The trailing guard is (?![A-Za-z0-9]) rather than \b: `_` is a word character, so \b
+# silently refused `PLAT-3113_notes`, which is how branch names and filenames spell it.
+# One digit is allowed — `PLAT-7` is a real key — and the cost of re-admitting `GPT-4`
+# shapes is paid by the denylist plus the page-existence filter, not by the shape.
+WORKSTREAM_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})(?![A-Za-z0-9])")
 # Prefixes that are never ticket keys. This list is an OPTIMISATION, not the filter — the
 # real filter is that a key with no page produces silence, so a novel false positive costs
-# one bounded scan and says nothing. Keeping the list short on purpose: a long denylist
-# would start suppressing real project prefixes nobody remembered to check.
+# one bounded scan and says nothing. Keeping it short on purpose: a long denylist would
+# start suppressing real project prefixes nobody remembered to check.
+#
+# Matched against the prefix with TRAILING DIGITS STRIPPED, because the first version
+# compared the whole group and so `SHA3-256`, `SHA2-512` and `HMAC-256` walked straight
+# past a list containing `SHA`. Verified by execution, not by reading the regex.
 WORKSTREAM_KEY_DENY = frozenset({
-    "UTF", "SHA", "AES", "RSA", "ISO", "RFC", "GPT", "HTTP", "IPV", "SSE", "TLS", "SSL",
-    "MD", "CVE", "UTC", "ASCII", "BASE",
+    "UTF", "SHA", "HMAC", "AES", "RSA", "ECDSA", "ISO", "RFC", "GPT", "HTTP", "IPV",
+    "SSE", "TLS", "SSL", "MD", "CVE", "UTC", "ASCII", "BASE", "FIPS", "NIST", "RS", "RJ",
+    "MPEG", "X", "ARM", "RTX", "GTX", "COVID", "PEP", "Q", "H", "CI", "PY", "ES", "USB",
 })
 WORKSTREAM_MAX_KEYS = 3    # keys acted on per prompt — a bound, and it is REPORTED when hit
-WORKSTREAM_SAMPLE = 2      # pages named per key
-WIKI_READ_PATHS_CAP = 200  # bound on the per-session record of which vault paths were read
+WORKSTREAM_SAMPLE = 2      # pages named per key — also REPORTED when it truncates
+WORKSTREAM_SCAN_BUDGET = 2.0   # seconds for the WHOLE scan, not per subprocess. The
+                               # per-call HYGIENE_GIT_TIMEOUT bounds one `git show`; with a
+                               # 24-file index cap that composed to a 75s worst case on the
+                               # single event where latency is most visible. An aggregate
+                               # deadline is the bound that actually matters.
+WORKSTREAM_MAX_SCANS = 24      # backstop: scans per session. Once-per-key already bounds
+                               # this by distinct keys; this catches a pathological prompt
+                               # stream that the per-key rule cannot.
+WIKI_READ_PATHS_CAP = 60   # vault-RELATIVE paths, not absolute. The state doc is
+                           # re-serialised on every PreToolUse, so this list is re-written
+                           # on every tool call — the exact growth pattern the ledger's
+                           # bucket comment rejects. 60 relative paths is ~2KB, not ~16KB.
 
 # ---- Dated claims (2026-07-27) ----
 # Some statements in this repo are true on a date and false afterwards, and they
@@ -533,13 +553,19 @@ def new_state(session_id):
         "dispatches_blocked_no_model": 0,
         "agent_models": {},
         "wiki_read_count": 0,
-        "wiki_paths_read": [],       # read-before-work: WHICH vault paths were opened, not
-                                     # just how many times. The count alone cannot answer
+        "wiki_paths_read": [],       # read-before-work: WHICH vault pages were opened, as
+                                     # vault-RELATIVE paths. The count alone cannot answer
                                      # "did you open the page for THIS ticket", which is the
-                                     # only question the advisory needs. Bounded by
-                                     # WIKI_READ_PATHS_CAP.
-        "workstream_keys_fired": [], # read-before-work: keys already advised on this session,
-                                     # so the nudge fires once per key rather than per prompt
+                                     # only question the advisory needs. Relative, not
+                                     # absolute, because this list is re-serialised on every
+                                     # PreToolUse. Bounded by WIKI_READ_PATHS_CAP.
+        "workstream_keys_fired": [], # read-before-work: keys SETTLED this session — looked
+                                     # for and nothing further to say. An unopened key is
+                                     # deliberately absent, so it re-fires until the page is
+                                     # opened rather than being burned on a message that may
+                                     # not have been delivered.
+        "workstream_scans": 0,       # read-before-work: git scans run, capped by
+                                     # WORKSTREAM_MAX_SCANS as a backstop under once-per-key
         "mech_bash_on_opus_streak": 0,
         "repo_roots_seen": [],   # Layer 3: distinct "<group>/<repo>" roots read inline
         "rlm_active": False,     # Layer 3 suppressor: a Workflow dispatch happened (NEW-2)
@@ -1600,26 +1626,61 @@ def wiki_index_context(state):
     )
 
 
+def _vault_relative(path):
+    """An absolute Read path → its vault-relative form, or None if it is not in the vault.
+
+    Two prefixes, not one. `_WIKI_PATH` is the canonical clone, but this repo mounts the
+    same vault at `docs/core/` — a symlink on this machine — so the identical page is
+    reachable under two absolute paths. Recording only the first meant a Read through the
+    mount was invisible, and the advisory would then assert "this session has not opened
+    it" about a page the session had just opened. That is a false statement in the one
+    sentence the check exists to make, not merely a missed suppression.
+    """
+    if not path:
+        return None
+    if (_WIKI_PATH + "/") in path:
+        return path.split(_WIKI_PATH + "/", 1)[1]
+    if "/docs/core/" in path:
+        return path.split("/docs/core/", 1)[1]
+    return None
+
+
 def workstream_keys(prompt):
     """Ticket-shaped keys in the prompt, deduped, in order, bounded.
 
     Returns (keys, truncated_count). The bound is REPORTED by the caller when hit,
     because a silently truncated list is a coverage claim nobody can check.
     """
-    seen = []
+    seen, order = set(), []
     for m in WORKSTREAM_KEY_RE.finditer(prompt or ""):
-        if m.group(1) in WORKSTREAM_KEY_DENY:
+        # Strip trailing digits before the denylist lookup: the prefix of `SHA3-256` is
+        # `SHA3`, and comparing the whole group let every decorated variant of a denied
+        # prefix through.
+        if m.group(1).rstrip("0123456789") in WORKSTREAM_KEY_DENY:
             continue
-        if m.group(0) not in seen:
-            seen.append(m.group(0))
-    return seen[:WORKSTREAM_MAX_KEYS], max(0, len(seen) - WORKSTREAM_MAX_KEYS)
+        key = m.group(0)
+        if key in seen:
+            continue
+        seen.add(key)
+        # Bounded DURING accumulation, not after. The first version appended to a list and
+        # sliced at the end, so membership was a linear scan over an unbounded list — a
+        # pasted CI log with thousands of distinct keys made this quadratic on the
+        # prompt-submit hot path, before any git call. Count the remainder instead.
+        if len(order) < WORKSTREAM_MAX_KEYS:
+            order.append(key)
+    return order, max(0, len(seen) - len(order))
 
 
 def workstream_page_scan(keys, repo=None):
-    """{key: [vault paths naming it]} for keys that have a page, or None if we COULD NOT LOOK.
+    """{"hits": {key: [paths]}, "truncated_indexes": n, "truncated_pages": n}, or None.
 
-    None and {} are different answers and the caller must keep them apart: {} means the
-    vault was searched and holds nothing for these keys, None means no search happened —
+    None means we COULD NOT LOOK; an empty `hits` means we looked and the vault holds
+    nothing for these keys. The two bounds are RETURNED rather than applied silently,
+    matching WIKI_INDEX_CAP's own comment in this file — a truncated result that reports
+    nothing is indistinguishable from "there is no page".
+
+    None and an empty `hits` are different answers and the caller must keep them apart:
+    empty means the vault was searched and holds nothing, None means no search happened —
     path absent, not a git repo, git missing or too slow, no commits. Reporting the second
     as the first is a check that never looked reporting a result.
 
@@ -1637,12 +1698,16 @@ def workstream_page_scan(keys, repo=None):
     if not keys or not repo.is_dir():
         return None
 
+    deadline = time.monotonic() + WORKSTREAM_SCAN_BUDGET
+
     def git(*args):
+        if time.monotonic() >= deadline:
+            return None
         try:
             proc = subprocess.run(
                 ["git", "-C", str(repo), *args],
                 capture_output=True, text=True, errors="surrogateescape",
-                timeout=HYGIENE_GIT_TIMEOUT,
+                timeout=max(0.1, min(HYGIENE_GIT_TIMEOUT, deadline - time.monotonic())),
             )
         except Exception:
             return None
@@ -1651,35 +1716,85 @@ def workstream_page_scan(keys, repo=None):
     listing = git("ls-tree", "-r", "HEAD", "--name-only", "-z")
     if listing is None:
         return None
-    tracked = [p for p in listing.split("\0") if p.endswith(".md")]
+    tracked = {p for p in listing.split("\0") if p.endswith(".md")}
     if not tracked:
         return None
+    # Bare-stem targets (`[[hot]]`) resolve through stems, exactly as wiki_index_scan does.
+    # The first version emitted `hot.md` as a repo-root path, which resolves to nothing for
+    # any page not literally at the vault root.
+    stems = {p[:-3].rsplit("/", 1)[-1]: p for p in tracked}
 
     index_paths = sorted(p for p in tracked if p.rsplit("/", 1)[-1] in WIKI_INDEX_NAMES)
-    index_text = []
+    index_text, unread = [], 0
     for path in index_paths[:WIKI_INDEX_CAP]:
         content = git("show", f"HEAD:{path}")
-        if content is not None:
-            index_text.append(content)
+        if content is None:
+            unread += 1
+            continue
+        index_text.append(content)
+    truncated_indexes = max(0, len(index_paths) - WIKI_INDEX_CAP) + unread
 
-    hits = {}
-    lowered = [(p, p.lower()) for p in tracked]
+    def _resolve(target):
+        """A wikilink target → the tracked path it names, or None if it names nothing.
+
+        This is the check the first version skipped entirely, and skipping it meant a
+        committed index row pointing at an UNCOMMITTED page — the precise defect
+        wiki_index_scan exists to detect, on the same tree — was advertised as a page to
+        open. Reproduced: `QQQ-42` returned `brain/ghost-page.md`, which is not in HEAD.
+        """
+        target = target.split("|", 1)[0].split("#", 1)[0].strip()
+        if not target or "://" in target:
+            return None
+        if "/" in target:
+            if target in tracked:
+                return target
+            if f"{target}.md" in tracked:
+                return f"{target}.md"
+            return None
+        return stems.get(target)
+
+    hits, sample_truncated = {}, 0
     for key in keys:
-        kl = key.lower()
-        found = [p for p, pl in lowered if kl in pl]
+        kl = re.escape(key.lower())
+        # Bounded on both sides: a bare substring made `PLAT-311` match
+        # `plat-3113-rtbf.md`, so a real key that is a numeric prefix of another real key
+        # resolved to the wrong page and the advisory stated it as fact.
+        key_re = re.compile(r"(?<![a-z0-9])" + kl + r"(?![a-z0-9])")
+        found = sorted(p for p in tracked if key_re.search(p.lower()))
         for content in index_text:
-            for line in content.splitlines():
-                if kl not in line.lower():
+            # Strip what only LOOKS like a link before scanning, for the reason
+            # _wikilinks_in already documents in this file: an index documenting the link
+            # convention carries [[example]] inside a fence, and nudging about it trains
+            # the reader to ignore the nudge.
+            body = _HTML_COMMENT_RE.sub("", content)
+            fence, marker = False, ""
+            for line in body.splitlines():
+                stripped = line.lstrip()
+                if fence:
+                    if stripped.startswith(marker):
+                        fence, marker = False, ""
                     continue
-                m = _WIKILINK_RE.search(line)
+                if stripped.startswith("```") or stripped.startswith("~~~"):
+                    fence, marker = True, stripped[:3]
+                    continue
+                # Table rows only, and the link is taken from the FIRST CELL. On a prose
+                # line "see [[a]] and [[b]] for KEY" the first wikilink is not the row's
+                # subject, and there is no row.
+                if not stripped.startswith("|") or not key_re.search(line.lower()):
+                    continue
+                cells = stripped.split("|")
+                first = cells[1] if len(cells) > 1 else ""
+                m = _WIKILINK_RE.search(_INLINE_CODE_RE.sub("", first))
                 if not m:
                     continue
-                target = m.group(1).split("|", 1)[0].split("#", 1)[0].strip()
-                if target and "://" not in target and target not in found:
-                    found.append(target if target.endswith(".md") else target + ".md")
+                resolved = _resolve(m.group(1))
+                if resolved and resolved not in found:
+                    found.append(resolved)
         if found:
+            sample_truncated += max(0, len(found) - WORKSTREAM_SAMPLE)
             hits[key] = found[:WORKSTREAM_SAMPLE]
-    return hits
+    return {"hits": hits, "truncated_indexes": truncated_indexes,
+            "truncated_pages": sample_truncated}
 
 
 def workstream_page_context(state, prompt):
@@ -1695,42 +1810,81 @@ def workstream_page_context(state, prompt):
     prompt names no key at all, nothing ran and the outcome is None — that is a third
     state, and calling it "clean" would be the vacuity this repo has a page about.
     """
-    keys, truncated = workstream_keys(prompt)
+    keys, truncated_keys = workstream_keys(prompt)
     if not keys:
         return (None, None)
 
-    fired = state.setdefault("workstream_keys_fired", [])
-    fresh = [k for k in keys if k not in fired]
+    settled = state.setdefault("workstream_keys_fired", [])
+    fresh = [k for k in keys if k not in settled]
     if not fresh:
         return (None, "already-advised")
+    if state.get("workstream_scans", 0) >= WORKSTREAM_MAX_SCANS:
+        return (None, "scan-budget-spent")
 
-    hits = workstream_page_scan(fresh)
-    if hits is None:
+    scan = workstream_page_scan(fresh)
+
+    # Persist against the FRESHEST state, not the copy loaded before the scan. The scan
+    # takes subprocess time, and sub-agents share this session_id and do their own unlocked
+    # load-modify-save in handle_pre_tool — writing the pre-scan snapshot back would revert
+    # every counter they advanced during the window. Re-load, touch only these fields, save.
+    def _mark(settled_keys):
+        try:
+            live = load_state(state.get("session_id"))
+            lst = live.setdefault("workstream_keys_fired", [])
+            for k in settled_keys:
+                if k not in lst:
+                    lst.append(k)
+            del lst[:-WORKSTREAM_MAX_SCANS * 2]
+            live["workstream_scans"] = live.get("workstream_scans", 0) + 1
+            save_state(live)
+        except Exception:
+            pass  # the advisory is still right for this prompt; only once-per-key is lost
+        for k in settled_keys:
+            if k not in settled:
+                settled.append(k)
+        state["workstream_scans"] = state.get("workstream_scans", 0) + 1
+
+    if scan is None:
+        # "Could not look" settles the key too. Otherwise an install whose wiki_path points
+        # nowhere — the packaged default does — rescans and writes a fire-log line on every
+        # prompt naming anything ticket-shaped, forever, burying the outcomes that matter.
+        _mark(fresh)
         return (None, "skipped")
 
-    # A key is "advised on" once we have LOOKED for it, whatever the answer. Marking only
-    # the ones that produced a message would re-scan every prompt for a key with no page —
-    # the common case — and the scan is the expensive half.
-    fired.extend(fresh)
-    del fired[:-50]
-    try:
-        save_state(state)
-    except Exception:
-        pass  # the advisory is still correct for this prompt; only the once-per-key is lost
-
+    hits = scan["hits"]
     read = state.get("wiki_paths_read") or []
     unopened = {}
     for key, paths in hits.items():
-        not_read = [p for p in paths if not any(r.endswith(p) for r in read)]
+        # Anchored: bare endswith matched across a path boundary, so a Read of
+        # `snapshot.md` credited `hot.md` as opened and silenced the advisory with no
+        # trace. That is the over-crediting direction, which this check must not have.
+        not_read = [p for p in paths if not any(r == p or r.endswith("/" + p) for r in read)]
         if not_read:
             unopened[key] = not_read
+
     if not unopened:
+        # Settled: nothing more to say about these keys this session.
+        _mark(fresh)
         return (None, "opened" if hits else "no-page")
+
+    # An UNOPENED key is deliberately NOT settled. `additionalContext` has been measured
+    # being dropped mid-session while every stamp advanced perfectly, and marking here
+    # would burn the key on a message that may never arrive — losing precisely the first
+    # prompt about that workstream, which is the one this check exists for. It re-fires
+    # until the page is actually opened, which also silences it.
+    _mark([k for k in fresh if k not in unopened])
 
     listed = "; ".join(
         f"**{key}** → {', '.join(paths)}" for key, paths in sorted(unopened.items())
     )
-    tail = f" ({truncated} further key(s) in this prompt not checked)" if truncated else ""
+    caveats = []
+    if truncated_keys:
+        caveats.append(f"{truncated_keys} further key(s) in this prompt not checked")
+    if scan["truncated_indexes"]:
+        caveats.append(f"{scan['truncated_indexes']} index file(s) not inspected")
+    if scan["truncated_pages"]:
+        caveats.append(f"{scan['truncated_pages']} further page(s) not listed")
+    tail = f" Incomplete coverage: {'; '.join(caveats)}." if caveats else ""
     return (
         f"**Read before work** — this prompt names a workstream the vault already has a page "
         f"for, and this session has not opened it: {listed}. Open it before deciding anything; "
@@ -2206,7 +2360,10 @@ def handle_pre_tool(payload):
     _wiki_read_target = ""
     if tool_name == "Read":
         _wiki_read_target = tool_input.get("file_path") or ""
-        _wiki_path_hit = (_WIKI_PATH + "/") in _wiki_read_target
+        # Via _vault_relative, so the docs/core mount counts as the vault here too. The
+        # first version tested only the canonical prefix, which meant a Read through the
+        # mount was neither counted nor recorded.
+        _wiki_path_hit = _vault_relative(_wiki_read_target) is not None
     elif tool_name in ("Grep", "Glob"):
         _wiki_path_hit = (_WIKI_PATH + "/") in (tool_input.get("path") or "")
     elif tool_name == "Bash":
@@ -2220,10 +2377,12 @@ def handle_pre_tool(payload):
         # let the advisory be silenced by an operation that read nothing in particular.
         # Under-crediting is the safe direction here: the cost is one extra nudge.
         if tool_name == "Read" and _wiki_read_target:
-            _seen = state.setdefault("wiki_paths_read", [])
-            if _wiki_read_target not in _seen:
-                _seen.append(_wiki_read_target)
-                del _seen[:-WIKI_READ_PATHS_CAP]
+            _rel = _vault_relative(_wiki_read_target)
+            if _rel:
+                _seen = state.setdefault("wiki_paths_read", [])
+                if _rel not in _seen:
+                    _seen.append(_rel)
+                    del _seen[:-WIKI_READ_PATHS_CAP]
 
     # ---------- Layer 3: cross-repo inline-drift catch-net (C3) ----------
     _root = None
