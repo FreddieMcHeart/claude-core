@@ -668,6 +668,100 @@ question it is answering, or does it distill uniformly? If uniformly, the agent 
 ready-made answer for it. Full context:
 `docs/core/brain/claude-core/measuring-interventions-controlled-ab-2026-07-20`.
 
+### The workstream advisory copies three helpers from its siblings, and the copies keep diverging
+
+`workstream_page_scan` re-implements, inline, three things `_wikilinks_in`,
+`wiki_index_scan` and `hygiene_scan` already do: the HTML-comment strip plus fence walk,
+the wikilink-target resolution through `tracked`/`stems`, and the
+`subprocess.run`-with-timeout wrapper. A reviewer counted roughly four omissions per
+forty-five copied lines, and each omission was a real defect fixed after the fact —
+bare-stem resolution, tracked-at-HEAD resolution, fence and comment stripping, and
+unterminated-fence reporting. The fourth was found on 2026-08-05, after the first three
+had already been repaired.
+
+Rule-of-three does not apply cleanly: the copies are *deliberately* slightly different
+(`tracked` is `.md`-only in one and all-files in the other; `stems` is a dict in one and
+a set in the other), and those intended differences are exactly what camouflaged the
+unintended ones.
+
+Deferred from PR #52 on purpose. That branch had already been rewritten twice, and
+touching two working checks to serve a third that currently matches zero pages in the
+configured vault trades live correctness for latent tidiness. The extraction is three
+units — `_content_lines(text) -> (lines, unterminated)`, `_resolve_target(target,
+tracked, stems) -> path | None`, and a module-level `_git_out(repo, *args, timeout)` —
+and wants its own branch, its own tests, and its own review pass.
+
+### `dated_claims_context`'s severity predicate logs a fired advisory at info — the same defect bfe2209 just fixed in a sibling
+
+`dated_claims_context`'s outcome `"due"` returns a real advisory — composed from
+`lines` and handed back to the caller, shown to the user exactly like the `"expired"`
+and `"malformed"` outcomes are. But the severity predicate at
+`hooks/cost-discipline.py:2315` is `"warn" if outcome in ("expired", "malformed") else
+"info"`, so a fired `"due"` advisory is logged at `info` — the fire log records a check
+that spoke as if it had stayed silent. This is a live instance of exactly what `bfe2209`
+("severity must ask whether an advisory fired, not what it is called") just repaired for
+`workstream_page_context` two entries up the call chain, still present in a direct
+sibling of the function that commit touched.
+
+CONFIRMED BY EXECUTION, not by reading: with a fixture claim ten days out and `log_fire`
+stubbed, `dated_claims_context` returned outcome `'due'` with an advisory present, and
+the end-to-end fire-log row was `('dated_claim', 'due', 'info')`.
+
+Deferred rather than fixed on this branch: converting that predicate to the property
+form — ask whether an advisory fired, not what the outcome is named — moves *every*
+`"due"` firing from `info` to `warn`. That is not the refactor `bfe2209` was; it changes
+what threshold users see for an upcoming (not yet missed) expiry, which is a product
+decision — does "expires in N days" deserve the same attention as "already expired"? —
+and wants its own review, not a rider on this branch.
+
+The other two siblings are the cheap half of the same job, by contrast, and do NOT carry
+this defect: `wiki_index_context` returns a message on exactly one outcome (`"dangling"`,
+out of `"skipped"/"clean"/"dangling"`), and `plugin_version_drift_context` returns a
+message on exactly one outcome (`"drifted"`, out of the `"skipped:*"/"in_sync"/"drifted"`
+set). For both, `"warn" if outcome == X else "info"` and `"fired" if advisory else
+"not fired"` are the same predicate under different names — verified by reading both
+functions' `return` statements — so converting those two to the property form is a
+genuine no-op and is the cheap half of this job. Only `dated_claims_context` has more
+than one message-bearing outcome, which is what makes its predicate a real decision
+instead of a rename.
+
+### `log_fire`'s docstring undersells its own `action` values
+
+`log_fire`'s docstring (`hooks/cost-discipline.py:1199`) states `action` ∈
+`{"warn","block"}`. Eight call sites in the same file pass `"info"` (lines 2303, 2315,
+2327, 2344, 2354, 2909, 2956, 3063) — every advisory-outcome logger the pulse runs, plus
+the workflow-lifecycle and frontmatter-model loggers. The docstring is stale for the
+function every advisory in this file reports through, not for some peripheral caller.
+
+Deferred: a one-line docstring fix, but this branch's own constraint is that
+`hooks/cost-discipline.py` does not change while three reviewers are reading it for PR
+#52 — editing it mid-review invalidates their review. Fix is
+`` `action` ∈ {"warn","block","info"} `` (or a plain `str` note, if the set is expected
+to keep growing) in the next PR that legitimately touches this file.
+
+### The `log_fire` test stub is copied into at least six files, in at least four incompatible shapes, and there is no `conftest.py` to hold one
+
+Six test files stub `log_fire` independently: `tests/test_agent_scoped_counters.py`,
+`tests/test_read_block_tier.py`, `tests/test_edit_loop_tier.py`,
+`tests/test_harness_hygiene.py`, `tests/test_dated_claims.py`, and
+`tests/test_wiki_index_integrity.py`. The stub shape has already diverged in at least
+four ways across those files: no-op, `(rule)`-only, `(rule, outcome)`, and now `(rule,
+outcome, severity)` — the shape this week's `bfe2209` work needed to assert the
+fired-vs-logged distinction. `find . -iname conftest.py` returns nothing repo-wide
+(verified by glob), so there is no shared fixture location, and every test file that
+needs to intercept `log_fire` re-derives the interception from scratch.
+
+Deferred rather than fixed here: introducing a `conftest.py` fixture touches every one
+of those six test files at minimum — converting each stub call site to use it — which
+is the same shared-infrastructure-mid-review problem as the helper-extraction entry
+above, just on the test side rather than the hook side. Worth flagging as a trend rather
+than a steady state: the divergence widened, not narrowed, this week — the `(rule,
+outcome, severity)` shape is new, not legacy. Deciding this needs its own branch: design
+the fixture's call signature (able to assert on `severity`, per the newest shape,
+without breaking the three older call sites that only assert on `rule` or `(rule,
+outcome)`) before converting the six call sites, and land it separately from any
+behavior change to `log_fire` itself.
+
 ## Tracked elsewhere (pointers, not duplicated here)
 
 - **ccm-lite eval rigor** — claim-linked provenance (separate span- from
