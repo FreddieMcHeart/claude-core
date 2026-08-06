@@ -859,6 +859,143 @@ outcome)`) before converting the six call sites, and land it separately from any
 behavior change to `log_fire` itself.
 
 
+### Nine more values keyed on the wrong event — a whole-file sweep after PR #52 repaired three
+
+PR #52 repaired three instances of one defect family in `hooks/cost-discipline.py`, all found
+in a single day: a **value computed from a proxy that coincided with the real property when it
+was written, and diverged silently the moment a new branch was added.** Severity keyed on an
+outcome's NAME rather than on whether an advisory was shown; a scan budget keyed on a key being
+SETTLED rather than on a scan having RUN; a "do not settle" gate keyed on the BATCH when the
+condition was a property of the KEY. None of the three failed a test, raised, or looked wrong.
+
+Three of one kind in one file is a population, not a coincidence, so the file was swept for the
+rest. Nine more. All of them are OUTSIDE PR #52 — they live in the cost ledger, the read-streak
+counters, the wiki-consumption detector and two sibling advisories — and none is fixed here.
+They want their own branch, because the hot path gets an independent review pass and a fix set
+this wide is not something to bolt onto a branch that has already been rewritten twice.
+
+**Evidence, stated per finding rather than in one blanket sentence, because it differs.** The
+sweep itself was a hand-trace: the reviewer agent has `BashOutput` without `Bash` and cannot
+execute. Every citation below was then checked mechanically against the file — 19 of 20 held at
+the stated line, the twentieth was off by one and is corrected here — and the structural claims
+were re-derived by executing source-level checks. Two were reproduced by running the code. The
+distinction is kept in each entry; a lead promoted to a fact by restatement is how this repo
+gets its worst bugs.
+
+#### Diverged today
+
+**1. Every ledger segment reports the SESSION's start time as its own.** REPRODUCED: two
+segments built from one state return an identical `started_at`. `_segment_from_state` reads
+`state["started_at"]` (`:748`), which is written only in `handle_session_start` (`:3231`).
+`handle_post_compact` resets every other field the segment reads — its own comment says "Every
+field that `_segment_from_state` reads must be reset here" — and then appends a segment. An
+executed check of segment fields against that function's reset list returns exactly one name:
+`started_at`. Corroborating evidence that different values were expected: `build_cost_ledger`
+deliberately reads `segments[0].get("started_at")` (`:830`) for the session-level field, which
+is only meaningful if later segments carry something else. They do not. Per-arc timing in the
+ledger is unusable and nothing raises.
+
+**2. `aggregate_reads` is zeroed by every dispatch, and it is a ledger segment field.**
+CONFIRMED STRUCTURALLY: the reset at `:3197` is inside `handle_post_tool`, and `:760` reads the
+same field into the segment. The comment at `:2608` asserts the field "stays session-wide for
+the cost ledger" — that is the claim `:3197` falsifies. `_sum_segments` then adds these up, so
+the audit metric under-reports reads by everything that happened before each dispatch — worst
+precisely in the well-delegated sessions the ledger exists to identify. Not reproduced
+end-to-end against a real ledger file.
+
+**3. `READ_TOOLS` is a four-name allowlist standing in for "read-only call".** CONFIRMED
+STRUCTURALLY: `READ_TOOLS = {"Bash", "Read", "Grep", "Glob"}` (`:203`), and `WebFetch`,
+`WebSearch`, `NotebookRead`, `LSP` and `Task` are all outside it. They fall to the `else` branch
+and RESET the read streak while contributing nothing to it. The sharp end: this same file
+prescribes the `LSP` tool over `Grep` for symbol work and nudges toward it on every code-shaped
+Grep — so **obeying the file's own advice defeats the file's own counter**, silently, in the
+under-warning direction. Scoped by name when the property is "this call produced output rather
+than a mutation".
+
+**4. Wiki-consumption detection is blind to the `docs/core` mount for Grep, Glob and Bash.**
+CONFIRMED STRUCTURALLY: `Read` was converted to `_vault_relative` (`:2548`); its three siblings
+twelve lines below still substring-match `_WIKI_PATH` (`:2550`, `:2552`). A `Grep` into the
+mount is a vault consult that does not count, so `wiki_first` keeps demanding a search the agent
+already ran. Note this is the same seam Task 8 of the PR #52 repair plan already targets — that
+task is written and unexecuted, so this entry is a pointer to it rather than new work.
+
+**5. The mechanical-Bash streak freezes rather than resets on a cheap model.** CONFIRMED
+STRUCTURALLY, and the comment states the intended property while the code implements a narrower
+one. `:2886` says "Resets on any non-Bash tool OR judgment-Bash". But the increment and one
+reset live inside `if tool_name == "Bash" and is_expensive_main_model():` (`:2890`, reset at
+`:2917`) and the other reset is under `elif tool_name != "Bash":` (`:2918`, `:2921`). A Bash
+call on a cheap model matches neither, so it neither increments nor resets: the streak survives
+the entire cheap stretch intact. The trigger is not a future edit — it is **the remedy the
+message itself prescribes**. Three mechanical Bash calls on Opus, comply with "switch to
+`/model sonnet` NOW", run twenty on Sonnet, return to Opus, and the next call resumes at four.
+The word "consecutive" in the one sentence the check exists to say is then false. General form:
+an increment and its reset must sit under the same guard, or the guard is a second invisible
+clock.
+
+**6. The reader-reflex tiers run on two different clocks across a compaction.** CONFIRMED
+STRUCTURALLY: `handle_post_compact` resets `warnings_fired` (`:3268`) and does not reset
+`reader_violations`. `reader_violations` was added to `new_state` after that reset list was
+written and the list was not extended. Post-compaction tier 1 re-arms and tier 2 does not, so
+the STOP-nudge fires again without counting and the escalation then lands one read early.
+
+**7. `tool_calls_total` counts refused calls, and the block message states it does not.**
+CONFIRMED STRUCTURALLY: the increment at `:2508` precedes all three `emit_block(...)` paths in
+`handle_pre_tool` and none follows them, and each of those paths persists state. The block text
+at `:2655` promises "This refused call is not counted, so the number will not climb" — true of
+the read counters, false of this one. Worth splitting rather than fixing wholesale: for the
+session-scope warn, counting a refusal is arguably right, since the block reason does enter
+context. For the ledger it is wrong, because `metered_results` counts only results that existed
+and is documented as the matching denominator. The message is wrong either way.
+
+#### Correct today, one plausible outcome away
+
+**8 and 9. `wiki_index_integrity` and `plugin_version_drift` key severity on the outcome NAME.**
+`"warn" if outcome == "dangling" else "info"` (`:2422`) and `"warn" if outcome == "drifted" else
+"info"` (`:2446`). Both have the advisory itself in scope two lines above and could ask it
+directly, which is exactly the repair `workstream_page` received. Each is one plausible outcome
+away from logging a fired advisory at `info`: `wiki_index_scan` already returns `truncated` and
+`unparsed`, so a `"dangling-partial"` is the obvious next addition; `plugin_version_drift`
+already computes a *diverged* case and folds it under `"drifted"`, and promoting it is plausible
+because its remedy differs — a divergence is not fixed by `claude plugin update`.
+
+Counted rather than asserted, because the first draft of this entry got it wrong in both
+directions: `hooks/cost-discipline.py` contains exactly **four** severity predicates on a
+`log_fire` call, and **three of the four are name-keyed**.
+
+| Line | Site | Predicate | Status |
+|---|---|---|---|
+| `:2422` | `wiki_index_integrity` | `outcome == "dangling"` | finding 8, open |
+| `:2434` | `dated_claims_context` | `outcome in ("expired", "malformed")` | recorded above, deferred |
+| `:2446` | `plugin_version_drift` | `outcome == "drifted"` | finding 9, open |
+| `:2469` | `workstream_page` | `ws` — the advisory itself | repaired by PR #52 |
+
+One repaired, three not. So the right fix is probably not three separate repairs but one
+shared helper taking the advisory, which is also the only version that stops the fourth
+instance being written next time. Note the second row has ALREADY been hand-extended once, from
+one name to two — a name-based predicate that has needed extending is telling you it will need
+extending again, and that nothing will fail when someone forgets.
+
+#### Separate family, recorded here because it is load-bearing for anything reading the ledger
+
+`write_cost_ledger` sets `state["last_ledger_sig"] = sig` (`:891`, not `:892` — the hand-trace
+was off by one, corrected against the file), but both call sites run `save_state(state)` BEFORE
+it, so the signature is never persisted. Combined with `metered_results` being part of the
+signature and incremented on every PostToolUse, the throttle can never skip a write. Two
+independent reasons, both inert-by-construction rather than keyed on the wrong event.
+
+#### The candidate that was NOT promoted, and why it is worth naming
+
+The sweep flagged one more and could not establish its premise: the dispatch reset in
+`handle_post_tool` is keyed on a dispatch-shaped tool call COMPLETING, not on a delegation
+having happened. If PostToolUse fires for an `Agent` call that errors — `Agent type
+'code-reviewer' not found` needs only an explicit `model:` to clear the PreToolUse gate — then
+one bogus dispatch clears `aggregate_reads`, `read_streak`, `agent_reads` and the scoped
+`warnings_fired`, fully discharging the hard-block tier without delegating anything. Whether
+the harness fires PostToolUse on a failed dispatch cannot be determined from source, and
+`tool_response` is never inspected for an error flag. **It is recorded as an open question
+rather than a finding, which is the correct handling and the reason it is written down at
+all** — one live test settles it.
+
 ## Tracked elsewhere (pointers, not duplicated here)
 
 - **ccm-lite eval rigor** — claim-linked provenance (separate span- from
