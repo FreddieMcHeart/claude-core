@@ -3394,6 +3394,40 @@ def handle_session_start(payload):
         open_cost_ledger_segment(load_state(session_id))
 
 
+def reader_roster():
+    """The reader agents that EXIST, read from disk. Returns (names, enumerated).
+
+    DERIVED, NOT RECITED, and that distinction has a nine-day price attached. The
+    post-compact reminder used to carry a hand-written list of five readers. `gcloud-reader`
+    was added to the fleet on 2026-07-28 — as the fix for an incident whose root cause was
+    that gcloud was the ONE tool with no reader, established from the child's transcript
+    rather than guessed — and the list was never told. So the remedy existed and the only
+    pointer to it did not mention it, which is the same shape that incident's own ROADMAP
+    entry names: a remedy that does not exist from where you are standing fails silently.
+    `notion-reader` would have arrived with the same gap on 2026-08-06.
+
+    The 2026-07-28 fix itself recorded "rosters derived rather than recited" as the principle,
+    and applied it to `when-to-delegate.md` while this message kept reciting. Deriving is
+    therefore not a new idea here; it is the one already written down, finally applied to the
+    second half.
+
+    Two returns, not one, because "the directory holds no readers" and "the directory could
+    not be read" are different answers and the caller must not print the first when it has the
+    second. A roster is a claim about a population; an unreadable directory bounds no
+    population at all.
+
+    Naming convention is the contract: a reader agent is `<tool>-reader.md`. That is what the
+    six existing ones already do, so the convention is observed rather than imposed.
+    """
+    try:
+        d = HARNESS_DIR / "agents"
+        if not d.is_dir():
+            return ([], False)
+        return (sorted(p.stem for p in d.glob("*-reader.md")), True)
+    except Exception:
+        return ([], False)
+
+
 def handle_post_compact(payload):
     """/clear or auto-compact: reset counters but keep tool_calls_total.
 
@@ -3450,6 +3484,28 @@ def handle_post_compact(payload):
     # validation and the checkpoint silently never lands. PostCompact's only
     # model-visible channel is the top-level `systemMessage` — use emit().
     # (Fixed 2026-06-03 after observing the validation error in a live compact.)
+    # Derived from disk so the roster cannot drift from the fleet. The names ARE the mapping
+    # — `gcloud-reader` for gcloud, `gh-reader` for gh — which is why no per-reader hint list
+    # is kept here: a hint map would be a second hand-maintained list with the same failure.
+    _readers, _enumerated = reader_roster()
+    if not _enumerated:
+        _reflex = (
+            "the reader roster could NOT be enumerated (`~/.claude/agents` unreadable). This "
+            "is not a claim that no readers exist — check before reading inline."
+        )
+    elif not _readers:
+        _reflex = (
+            "no reader agents are installed. Read-only queries have no delegate here, so say "
+            "so rather than reading inline unnoticed — that gap is what the 2026-07-27 "
+            "inline-gcloud incident was."
+        )
+    else:
+        _reflex = (
+            "for any read-only query, dispatch the reader whose name matches the tool "
+            "(Haiku). Installed: " + ", ".join(f"`{n}`" for n in _readers) + ". Derived from "
+            "`~/.claude/agents/` at compaction time rather than listed here, so it cannot "
+            "fall behind the fleet. WRITES are never delegated."
+        )
     reminder = (
         "**Post-compact checkpoint — cost discipline re-routing required.**\n\n"
         "The conversation summary above describes prior tasks in an execution frame "
@@ -3459,13 +3515,7 @@ def handle_post_compact(payload):
         "the remaining work. Prior model choice is summarized, not live.\n"
         "2. **Invoke `delegation-discipline` skill** before the next bulk read or "
         "sub-agent dispatch. Prior dispatch decisions don't carry over.\n"
-        "3. **Reader-agent reflex**: for kubectl get/describe/logs/top, dispatch "
-        "`kubectl-reader` (Haiku). For gh pr/run/repo reads, dispatch `gh-reader`. "
-        "For Slack reads, `slack-reader`. For Datadog, `datadog-reader`. "
-        "For Jira reads (getJiraIssue/searchJiraIssuesUsingJql/transitions), dispatch `jira-reader`. "
-        "For gcloud logging/list/describe reads, dispatch `gcloud-reader`. For Notion reads "
-        "(fetch/search/query-database-view/query-data-sources), dispatch `notion-reader` — Notion "
-        "WRITES stay inline; publication-gate.py gates them.\n"
+        f"3. **Reader-agent reflex**: {_reflex}\n"
         "4. **Git workflows**: default to the `commit-commands` plugin's `/commit` / "
         "`/commit-push-pr` — cheaper than ad-hoc Bash chains. Project-specific ticket/PR "
         "conventions live in that project's own CLAUDE.md, not a bespoke slash command.\n\n"
