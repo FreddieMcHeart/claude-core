@@ -190,11 +190,40 @@ def test_scan_resolves_a_bare_stem_through_the_stem_map(vault):
     assert scan["hits"] == {"BARE-11": ["brain/proj/deep/bare-stem-target.md"]}
 
 
+def test_an_ambiguous_bare_stem_resolves_to_nothing(vault):
+    """`stems` was a dict built by iterating a SET, so a colliding basename resolved
+    to whichever path set iteration happened to yield — reproduced across three
+    processes as z/dup.md, a/dup.md, z/dup.md for identical input. Determinism is not
+    the fix: the advisory states the path as fact, so the wrong page reliably is worse
+    than no page at all.
+
+    CONTROL: BARE-11 is already in the `vault` fixture as a bare stem with exactly one
+    match, and this test asserts it STILL resolves in the same scan call — otherwise
+    this would pass equally under an implementation that resolves every bare stem, not
+    just the colliding one, to nothing.
+    """
+    for d in ("one", "two"):
+        (vault / "brain" / d).mkdir(exist_ok=True)
+        (vault / "brain" / d / "dup.md").write_text("x")
+    (vault / "brain" / "collide_index").mkdir(exist_ok=True)
+    (vault / "brain" / "collide_index" / "_index.md").write_text(
+        "| [[dup]] | COLL-11 |\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "colliding stems")
+    scan = cd.workstream_page_scan(["COLL-11", "BARE-11"], repo=vault)
+    assert scan["hits"].get("COLL-11") is None, "the collision must not resolve to either page"
+    assert scan["hits"]["BARE-11"] == ["brain/proj/deep/bare-stem-target.md"], \
+        "an unrelated, unambiguous bare stem must still resolve"
+    assert scan["ambiguous_keys"] == {"COLL-11"}
+
+
 def test_scan_drops_an_index_row_whose_page_is_not_committed(vault):
     """The dangling-row case — the exact defect wiki_index_scan exists to detect, on the
     same tree. The first version advertised it as a page to open; reproduced as
     `GHOST-42 -> brain/proj/ghost-page.md`, a file that is not in HEAD."""
     assert cd.workstream_page_scan(["GHOST-42"], repo=vault)["hits"] == {}
+    assert cd.workstream_page_scan(["GHOST-42"], repo=vault)["ambiguous_keys"] == set(), \
+        "a dangling link is a definite no-page answer, not an ambiguous one"
 
 
 def test_scan_takes_the_link_from_the_rows_first_cell(vault):
@@ -401,6 +430,75 @@ def test_a_truncated_scan_does_not_settle_an_already_opened_key_on_the_message_p
     assert "ZQ-77" in msg2
     assert "PLAT-3113" not in st_trunc["workstream_keys_fired"], \
         "a truncated scan must not settle a key just because its only known page was already read"
+
+
+def _collide(vault):
+    """Commit a stem collision (`dup.md` in two directories) plus an index row that
+    names it under COLL-11. Shared setup for the ambiguity tests below."""
+    for d in ("one", "two"):
+        (vault / "brain" / d).mkdir(exist_ok=True)
+        (vault / "brain" / d / "dup.md").write_text("x")
+    (vault / "brain" / "collide_index").mkdir(exist_ok=True)
+    (vault / "brain" / "collide_index" / "_index.md").write_text(
+        "| [[dup]] | COLL-11 |\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "colliding stems")
+
+
+def test_an_ambiguous_key_is_not_settled_and_not_claimed_no_page(live, vault):
+    """The vault genuinely HAS a page for COLL-11 — two of them — so claiming 'no-page'
+    would assert something false, and settling the key would make that false claim
+    permanent for the session (workstream_keys_fired is never rechecked once a key is
+    in it). The controller's ruling: ambiguity must read as UNPROVEN, the same way an
+    incomplete index scan does, not as a confident 'no page here'.
+
+    CONTROL: ZZZ-999, an ordinary key with genuinely no page anywhere in the vault,
+    settles normally as 'no-page' in a SEPARATE call — proving the block is specific to
+    the key whose own resolution was ambiguous, not a side effect of an ambiguous stem
+    existing somewhere in the vault.
+    """
+    _collide(vault)
+
+    st = _state()
+    msg, outcome = cd.workstream_page_context(st, "COLL-11")
+    assert msg is None
+    assert outcome == "no-page-partial"
+    assert "COLL-11" not in st["workstream_keys_fired"]
+
+    st_control = _state()
+    assert cd.workstream_page_context(st_control, "ZZZ-999") == (None, "no-page")
+    assert "ZZZ-999" in st_control["workstream_keys_fired"]
+
+
+def test_ambiguity_for_one_key_holds_back_the_whole_batch_like_truncation_does(live, vault):
+    """Ambiguity is detected per key, but the settling decision it feeds is BATCH-level —
+    the same design this file already applies to `truncated_indexes`, for the same
+    reason: a per-key carve-out here would need a per-key outcome vocabulary this file
+    does not have. ZZZ-999 has no page anywhere and would ordinarily settle as
+    'no-page' on its own (see the control above); sharing a prompt with the ambiguous
+    COLL-11 must hold IT back too.
+    """
+    _collide(vault)
+    st = _state()
+    msg, outcome = cd.workstream_page_context(st, "COLL-11 and ZZZ-999")
+    assert msg is None
+    assert outcome == "no-page-partial"
+    assert "COLL-11" not in st["workstream_keys_fired"]
+    assert "ZZZ-999" not in st["workstream_keys_fired"]
+
+
+def test_ambiguity_is_reported_in_the_message_caveats(live, vault):
+    """Ruling point 3: ambiguity must show up in `Incomplete coverage:`, in the same
+    caveat list as the index-file and page-sample bounds, in the same voice — not fold
+    silently into 'unopened'. PLAT-3113 has a real, unread hit (by filename, unaffected
+    by the collision) so this exercises the branch that DOES produce a message."""
+    _collide(vault)
+    msg, outcome = cd.workstream_page_context(_state(), "PLAT-3113 and COLL-11")
+    assert outcome == "unopened-partial"
+    assert "PLAT-3113" in msg
+    assert "COLL-11" not in msg, "COLL-11 has no resolved page to name"
+    assert "Incomplete coverage" in msg
+    assert "claimed by more than one committed page" in msg
 
 
 def test_no_key_in_prompt_is_a_third_state_not_clean(live):

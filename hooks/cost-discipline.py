@@ -1680,7 +1680,17 @@ def workstream_keys(prompt, exclude=()):
 
 
 def workstream_page_scan(keys, repo=None):
-    """{"hits": {key: [all resolved paths]}, "truncated_indexes": n}, or None.
+    """{"hits": {...}, "truncated_indexes": n, "ambiguous_keys": {...}}, or None.
+
+    `ambiguous_keys` is a set of the keys (from `keys`) whose resolution hit a bare
+    wikilink stem that names more than one committed page (see `stems` below). This is
+    NOT the same population as a dangling row: a row pointing at a page that does not
+    exist has a definite answer — no page — and belongs to `truncated_indexes`'s sibling,
+    silence. An ambiguous stem has pages, plural, and no way to say which one; folding it
+    into "no hits" would let the caller assert "no page exists" about a key the vault
+    actually documents, and folding it into `truncated_indexes` would say "an index file
+    was not inspected" about a file that was read in full. Neither statement is true, so
+    it gets its own count.
 
     `hits` is NOT truncated here. The caller filters out pages this session already
     opened, and sampling before that filter let two already-read pages consume both
@@ -1735,7 +1745,17 @@ def workstream_page_scan(keys, repo=None):
     # Bare-stem targets (`[[hot]]`) resolve through stems, exactly as wiki_index_scan does.
     # The first version emitted `hot.md` as a repo-root path, which resolves to nothing for
     # any page not literally at the vault root.
-    stems = {p[:-3].rsplit("/", 1)[-1]: p for p in tracked}
+    #
+    # {stem: path}, with an AMBIGUOUS stem mapped to None rather than to an arbitrary
+    # winner. `tracked` is a set, so a dict comprehension over it let a colliding
+    # basename resolve differently between processes — the same input answering
+    # z/dup.md, a/dup.md, z/dup.md across three runs. Determinism would only make the
+    # wrong answer reliable; the advisory states this path as fact, so an ambiguous
+    # stem must resolve to nothing.
+    stems = {}
+    for p in tracked:
+        stem = p[:-3].rsplit("/", 1)[-1]
+        stems[stem] = None if stem in stems else p
 
     index_paths = sorted(p for p in tracked if p.rsplit("/", 1)[-1] in WIKI_INDEX_NAMES)
     index_rows, unread = [], 0
@@ -1773,14 +1793,25 @@ def workstream_page_scan(keys, repo=None):
             unread += 1
     truncated_indexes = max(0, len(index_paths) - WIKI_INDEX_CAP) + unread
 
+    # Populated by `_resolve` below, keyed by the RAW (un-normalized) target string, so
+    # the per-key loop can ask "was this exact call ambiguous?" without re-deriving the
+    # stem lookup. `_resolve`'s return value stays plain None either way — "not found"
+    # and "found more than one" are the same answer to a caller that only wants a path —
+    # this is the side channel that lets the scan tell them apart.
+    ambiguous_targets = set()
+
     def _resolve(target):
-        """A wikilink target → the tracked path it names, or None if it names nothing.
+        """A wikilink target → the tracked path it names, or None if it names nothing —
+        either because no tracked page matches, or because the bare stem matches more
+        than one (`stems[stem] is None`, set above). Both are None here; `ambiguous_targets`
+        records which raw targets hit the second case, for the per-key loop below.
 
         This is the check the first version skipped entirely, and skipping it meant a
         committed index row pointing at an UNCOMMITTED page — the precise defect
         wiki_index_scan exists to detect, on the same tree — was advertised as a page to
         open. Reproduced: `QQQ-42` returned `brain/ghost-page.md`, which is not in HEAD.
         """
+        raw = target
         target = target.split("|", 1)[0].split("#", 1)[0].strip()
         if not target or "://" in target:
             return None
@@ -1790,9 +1821,13 @@ def workstream_page_scan(keys, repo=None):
             if f"{target}.md" in tracked:
                 return f"{target}.md"
             return None
-        return stems.get(target)
+        resolved = stems.get(target)
+        if resolved is None and target in stems:
+            ambiguous_targets.add(raw)
+        return resolved
 
     hits = {}
+    ambiguous_keys = set()
     lowered = [(p, p.lower()) for p in tracked]
     for key in keys:
         kl = re.escape(key.lower())
@@ -1809,9 +1844,16 @@ def workstream_page_scan(keys, repo=None):
             resolved = _resolve(target)
             if resolved and resolved not in found:
                 found.append(resolved)
+            elif target in ambiguous_targets:
+                # This row's wikilink names a stem that matches more than one
+                # committed page. `_resolve` already answered None for it — same
+                # as "not found" — but this key is NOT "no page for this key": a
+                # page exists, we just cannot say which, and stating the wrong one
+                # is worse than staying silent (see the `stems` comment above).
+                ambiguous_keys.add(key)
         if found:
             hits[key] = found
-    return {"hits": hits, "truncated_indexes": truncated_indexes}
+    return {"hits": hits, "truncated_indexes": truncated_indexes, "ambiguous_keys": ambiguous_keys}
 
 
 def workstream_page_context(state, prompt):
@@ -1826,10 +1868,14 @@ def workstream_page_context(state, prompt):
     `scan-budget-spent`, `unopened`, `unopened-partial`), because a check that only
     speaks when it finds something is indistinguishable from one that was never wired
     up. `unopened-partial` is `unopened` with the same advisory but an incomplete
-    index scan behind it — the fire log needs to tell "advised, and the search was
-    whole" apart from "advised, and the search was partial". When the prompt names no
-    key at all, nothing ran and the outcome is None — a third state, and calling it
-    "clean" would be the vacuity this repo has a page about.
+    index scan OR an ambiguous stem resolution behind it — the fire log needs to tell
+    "advised, and the search was whole" apart from "advised, and the search was
+    partial" (`no-page-partial` draws the same line on the no-advisory side). No new
+    outcome name exists for ambiguity specifically: it is unproven in exactly the same
+    sense a truncated index enumeration is, so it reuses that vocabulary rather than
+    adding a parallel one. When the prompt names no key at all, nothing ran and the
+    outcome is None — a third state, and calling it "clean" would be the vacuity this
+    repo has a page about.
     """
     settled = state.setdefault("workstream_keys_fired", [])
     keys, truncated_keys = workstream_keys(prompt, exclude=settled)
@@ -1877,6 +1923,7 @@ def workstream_page_context(state, prompt):
         return (None, "skipped")
 
     hits = scan["hits"]
+    ambiguous = scan["ambiguous_keys"]
     read = state.get("wiki_paths_read") or []
     unopened, truncated_pages = {}, 0
     for key, paths in hits.items():
@@ -1893,7 +1940,7 @@ def workstream_page_context(state, prompt):
             unopened[key] = not_read[:WORKSTREAM_SAMPLE]
 
     if not unopened:
-        if scan["truncated_indexes"]:
+        if scan["truncated_indexes"] or ambiguous:
             # The scan did not finish enumerating the population it would need to claim
             # "no page exists" — the higher-recall (index) half was cut short by
             # WIKI_INDEX_CAP, not merely thin. This is BATCH-level, not per-key: a key
@@ -1908,6 +1955,12 @@ def workstream_page_context(state, prompt):
             # same keys and the scan budget burns down without ever reaching a verdict.
             # No advisory is produced on this branch either way, so both the no-hits
             # and the already-read-hit case collapse into the same qualified outcome.
+            #
+            # `ambiguous` joins the same gate for a different reason: the index half was
+            # read in full, but at least one row named a stem this scan cannot tell
+            # apart between two or more pages. "No page" would be a false claim about a
+            # key the vault does document, so it gets the same qualified outcome as a
+            # truncated enumeration rather than a claim this scan cannot support.
             return (None, "no-page-partial")
         # Settled: nothing more to say about these keys this session.
         _mark(fresh)
@@ -1918,14 +1971,17 @@ def workstream_page_context(state, prompt):
     # would burn the key on a message that may never arrive — losing precisely the first
     # prompt about that workstream, which is the one this check exists for. It re-fires
     # until the page is actually opened, which also silences it.
-    if scan["truncated_indexes"]:
+    if scan["truncated_indexes"] or ambiguous:
         # Same reasoning as the no-advisory branch above, extended to the keys that DID
         # settle there before this fix: a truncated index enumeration means the page
         # list for those keys is unproven too, so `_mark` must not run for them either.
         # The advisory below still fires — a partial scan that found something real is
         # more useful than silence — but the outcome is tagged so a fire-log reader can
         # tell "advised, and the search was whole" from "advised, and the search was
-        # partial".
+        # partial". `ambiguous` joins this gate too: a key whose resolution hit a
+        # colliding stem is exactly as unproven as one behind an unread index file, and
+        # settling it would let the vault's next matching prompt go silent about a
+        # workstream that was never actually confirmed either way.
         outcome = "unopened-partial"
     else:
         _mark([k for k in fresh if k not in unopened])
@@ -1939,6 +1995,11 @@ def workstream_page_context(state, prompt):
         caveats.append(f"{truncated_keys} further key(s) in this prompt not checked")
     if scan["truncated_indexes"]:
         caveats.append(f"{scan['truncated_indexes']} index file(s) not inspected")
+    if ambiguous:
+        caveats.append(
+            f"{len(ambiguous)} key(s) named a page whose basename is claimed by more "
+            f"than one committed page"
+        )
     if truncated_pages:
         caveats.append(f"{truncated_pages} further page(s) not listed")
     tail = f" Incomplete coverage: {'; '.join(caveats)}." if caveats else ""
