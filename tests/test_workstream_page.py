@@ -297,14 +297,14 @@ def test_scan_bounds_total_subprocess_time_not_just_each_call(vault, monkeypatch
 # --------------------------------------------------------------------------- the advisory
 
 def test_fires_when_the_page_exists_and_was_not_opened(live):
-    msg, outcome = cd.workstream_page_context(_state(), "start on PLAT-3113 please")
+    msg, outcome, _ = cd.workstream_page_context(_state(), "start on PLAT-3113 please")
     assert outcome == "unopened"
     assert "brain/proj/PLAT-3113-rtbf-migration.md" in msg
 
 
 def test_silent_when_the_page_was_already_opened(live):
     st = _state(wiki_paths_read=["brain/proj/PLAT-3113-rtbf-migration.md"])
-    assert cd.workstream_page_context(st, "continue PLAT-3113") == (None, "opened")
+    assert cd.workstream_page_context(st, "continue PLAT-3113") == (None, "opened", {})
 
 
 def test_a_read_of_a_suffix_lookalike_does_not_credit_the_page(live):
@@ -316,20 +316,26 @@ def test_a_read_of_a_suffix_lookalike_does_not_credit_the_page(live):
 
 
 def test_silent_but_LOGGED_when_no_page_exists(live):
-    assert cd.workstream_page_context(_state(), "look at ZZZ-999") == (None, "no-page")
+    assert cd.workstream_page_context(_state(), "look at ZZZ-999") == (None, "no-page", {})
 
 
 def test_an_incomplete_scan_is_not_reported_as_no_page(live, monkeypatch):
     """Two reviewers found this independently. With the index cap at 0 the scan reads
     no index file, so the higher-recall half never runs — yet the caller reported a
     confident `no-page` AND settled the key, making the miss permanent for the
-    session. An absence claim over a population the code knows it did not enumerate."""
+    session. An absence claim over a population the code knows it did not enumerate.
+
+    `details` (Finding 2, round 2): `no-page-partial` returns no message, so the cause
+    has to travel some other way or a fire-log reader can't tell "raise the cap" from
+    "rename a colliding page" apart. Here it's the index cap, so `details` names that.
+    """
     monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
     st = _state()
-    msg, outcome = cd.workstream_page_context(st, "INE-857")
+    msg, outcome, details = cd.workstream_page_context(st, "INE-857")
     assert outcome == "no-page-partial"
     assert msg is None
     assert "INE-857" not in st["workstream_keys_fired"], "an incomplete scan must not settle"
+    assert details == {"truncated_indexes": 1}
 
 
 def test_a_hit_elsewhere_in_the_batch_does_not_mask_a_truncated_key(live, monkeypatch):
@@ -349,7 +355,7 @@ def test_a_hit_elsewhere_in_the_batch_does_not_mask_a_truncated_key(live, monkey
     happened to have a hit.
     """
     st_control = _state()
-    msg, outcome = cd.workstream_page_context(st_control, "PLAT-3113 and INE-857")
+    msg, outcome, _ = cd.workstream_page_context(st_control, "PLAT-3113 and INE-857")
     assert outcome == "unopened"
     assert "PLAT-3113" in msg and "INE-857" in msg
     assert "INE-857" not in st_control["workstream_keys_fired"]
@@ -357,7 +363,7 @@ def test_a_hit_elsewhere_in_the_batch_does_not_mask_a_truncated_key(live, monkey
 
     monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
     st_trunc = _state()
-    msg2, outcome2 = cd.workstream_page_context(st_trunc, "PLAT-3113 and INE-857")
+    msg2, outcome2, _ = cd.workstream_page_context(st_trunc, "PLAT-3113 and INE-857")
     assert outcome2 == "unopened-partial"
     assert "PLAT-3113" in msg2
     assert "INE-857" not in msg2, "the truncated scan never found INE-857, so it cannot be named"
@@ -386,15 +392,16 @@ def test_a_truncated_scan_does_not_settle_an_already_opened_hit_either(live, mon
     read = ["brain/proj/PLAT-3113-rtbf-migration.md"]
 
     st_control = _state(wiki_paths_read=list(read))
-    assert cd.workstream_page_context(st_control, "PLAT-3113") == (None, "opened")
+    assert cd.workstream_page_context(st_control, "PLAT-3113") == (None, "opened", {})
     assert "PLAT-3113" in st_control["workstream_keys_fired"]
 
     monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
     st_trunc = _state(wiki_paths_read=list(read))
-    msg, outcome = cd.workstream_page_context(st_trunc, "PLAT-3113")
+    msg, outcome, details = cd.workstream_page_context(st_trunc, "PLAT-3113")
     assert outcome == "no-page-partial"
     assert msg is None
     assert "PLAT-3113" not in st_trunc["workstream_keys_fired"]
+    assert details == {"truncated_indexes": 1}
 
 
 def test_a_truncated_scan_does_not_settle_an_already_opened_key_on_the_message_path(
@@ -418,14 +425,14 @@ def test_a_truncated_scan_does_not_settle_an_already_opened_key_on_the_message_p
     read = ["brain/proj/PLAT-3113-rtbf-migration.md"]
 
     st_control = _state(wiki_paths_read=list(read))
-    msg, outcome = cd.workstream_page_context(st_control, "PLAT-3113 and ZQ-77")
+    msg, outcome, _ = cd.workstream_page_context(st_control, "PLAT-3113 and ZQ-77")
     assert outcome == "unopened"
     assert "ZQ-77" in msg
     assert "PLAT-3113" in st_control["workstream_keys_fired"]
 
     monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
     st_trunc = _state(wiki_paths_read=list(read))
-    msg2, outcome2 = cd.workstream_page_context(st_trunc, "PLAT-3113 and ZQ-77")
+    msg2, outcome2, _ = cd.workstream_page_context(st_trunc, "PLAT-3113 and ZQ-77")
     assert outcome2 == "unopened-partial"
     assert "ZQ-77" in msg2
     assert "PLAT-3113" not in st_trunc["workstream_keys_fired"], \
@@ -456,35 +463,98 @@ def test_an_ambiguous_key_is_not_settled_and_not_claimed_no_page(live, vault):
     settles normally as 'no-page' in a SEPARATE call — proving the block is specific to
     the key whose own resolution was ambiguous, not a side effect of an ambiguous stem
     existing somewhere in the vault.
+
+    `details` (Finding 2, round 2): the silent `no-page-partial` branch names its cause.
     """
     _collide(vault)
 
     st = _state()
-    msg, outcome = cd.workstream_page_context(st, "COLL-11")
+    msg, outcome, details = cd.workstream_page_context(st, "COLL-11")
     assert msg is None
     assert outcome == "no-page-partial"
     assert "COLL-11" not in st["workstream_keys_fired"]
+    assert details == {"ambiguous_keys": ["COLL-11"]}
 
     st_control = _state()
-    assert cd.workstream_page_context(st_control, "ZZZ-999") == (None, "no-page")
+    assert cd.workstream_page_context(st_control, "ZZZ-999") == (None, "no-page", {})
     assert "ZZZ-999" in st_control["workstream_keys_fired"]
 
 
-def test_ambiguity_for_one_key_holds_back_the_whole_batch_like_truncation_does(live, vault):
-    """Ambiguity is detected per key, but the settling decision it feeds is BATCH-level —
-    the same design this file already applies to `truncated_indexes`, for the same
-    reason: a per-key carve-out here would need a per-key outcome vocabulary this file
-    does not have. ZZZ-999 has no page anywhere and would ordinarily settle as
-    'no-page' on its own (see the control above); sharing a prompt with the ambiguous
-    COLL-11 must hold IT back too.
+def test_ambiguity_in_one_key_does_not_hold_back_an_unrelated_key(live, vault, monkeypatch):
+    """INVERTED (round 2, Finding 1) from this test's first version, which was named
+    `..._holds_back_the_whole_batch_like_truncation_does` and asserted the opposite:
+    that COLL-11's collision also blocked ZZZ-999, an unrelated key in the same prompt,
+    from settling. That assertion followed directly from round 1's own ruling that
+    ambiguity "joins the same gate" as `truncated_indexes` — the test faithfully
+    encoded that ruling, and the ruling was wrong, confirmed by the coordinator's own
+    execution. It is being replaced, not deleted, because the wrongness was in the
+    ruling, not in the test's fidelity to it.
+
+    THE INVARIANT, stated once here because a reader who sees only one arm might "fix"
+    the asymmetry back: a truncated index enumeration is a property of the SCAN — some
+    index files were never read, so every key in this batch has an unproven page list,
+    hit or not. A colliding stem is a property of a KEY — it affects only the keys
+    whose rows actually link it. Gating settlement on `ambiguous` being merely
+    non-empty punished ZZZ-999, which never went near the collision. The two causes are
+    deliberately different from here on; the truncation arm below is the contrast that
+    makes the difference legible instead of looking like an oversight.
     """
     _collide(vault)
+
+    # Ambiguity arm: COLL-11 collides, ZZZ-999 has no page anywhere. Both have zero
+    # hits, so this lands in the "not unopened" branch. ZZZ-999 must still settle.
     st = _state()
-    msg, outcome = cd.workstream_page_context(st, "COLL-11 and ZZZ-999")
+    msg, outcome, details = cd.workstream_page_context(st, "COLL-11 and ZZZ-999")
     assert msg is None
     assert outcome == "no-page-partial"
-    assert "COLL-11" not in st["workstream_keys_fired"]
-    assert "ZZZ-999" not in st["workstream_keys_fired"]
+    assert "COLL-11" not in st["workstream_keys_fired"], "the colliding key itself stays unproven"
+    assert "ZZZ-999" in st["workstream_keys_fired"], \
+        "an unrelated key in the same prompt must settle despite its batch-mate's collision"
+    assert details == {"ambiguous_keys": ["COLL-11"]}
+
+    # Truncation arm, same branch shape (INE-857 and ZZZ-999 both have zero hits when
+    # the index half can't be read, so this also lands in "not unopened"): truncation
+    # IS batch-wide and must still hold both keys back — the contrast this test exists
+    # to keep visible.
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    st_trunc = _state()
+    msg2, outcome2, details2 = cd.workstream_page_context(st_trunc, "INE-857 and ZZZ-999")
+    assert msg2 is None
+    assert outcome2 == "no-page-partial"
+    assert "INE-857" not in st_trunc["workstream_keys_fired"]
+    assert "ZZZ-999" not in st_trunc["workstream_keys_fired"], \
+        "a truncated index enumeration IS batch-wide and must still hold everyone back"
+    assert details2 == {"truncated_indexes": 2}, \
+        "_collide added a second _index.md to the vault, so both are uncounted at cap 0"
+
+
+def test_ambiguity_does_not_hold_back_an_already_read_batch_mate_in_the_unopened_branch(
+    live, vault,
+):
+    """Same invariant as the test above (Finding 1), exercised on the OTHER settling
+    site: the "unopened" branch's `_mark([k for k in fresh if k not in unopened])`,
+    which used to be guarded by `scan["truncated_indexes"] or ambiguous` — batch-wide —
+    and is now guarded by `scan["truncated_indexes"]` alone, with ambiguity filtered
+    per key inside the `_mark` call. This is closer to the coordinator's own
+    reproduction: a key with a real, unread hit (PLAT-3113) forces this branch; ZQ-77
+    is a second, unrelated key with its own real hit that is ALREADY read and would
+    ordinarily settle; COLL-11 is the colliding key. Before this fix, ZQ-77 never
+    settled just because COLL-11, a batch-mate it has nothing to do with, collided.
+    """
+    (vault / "brain" / "proj" / "ZQ-77-notes.md").write_text("# zq\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "second page")
+    _collide(vault)
+
+    st = _state(wiki_paths_read=["brain/proj/ZQ-77-notes.md"])
+    msg, outcome, details = cd.workstream_page_context(st, "PLAT-3113 and ZQ-77 and COLL-11")
+    assert outcome == "unopened-partial"
+    assert "PLAT-3113" in msg
+    assert "PLAT-3113" not in st["workstream_keys_fired"], "unopened keys never settle, ambiguity or not"
+    assert "ZQ-77" in st["workstream_keys_fired"], \
+        "a clean, already-read batch-mate must settle despite COLL-11's collision"
+    assert "COLL-11" not in st["workstream_keys_fired"], "the colliding key itself stays unproven"
+    assert details == {}, "this branch reaches a message, which already names the cause in prose"
 
 
 def test_ambiguity_is_reported_in_the_message_caveats(live, vault):
@@ -493,16 +563,59 @@ def test_ambiguity_is_reported_in_the_message_caveats(live, vault):
     silently into 'unopened'. PLAT-3113 has a real, unread hit (by filename, unaffected
     by the collision) so this exercises the branch that DOES produce a message."""
     _collide(vault)
-    msg, outcome = cd.workstream_page_context(_state(), "PLAT-3113 and COLL-11")
+    msg, outcome, details = cd.workstream_page_context(_state(), "PLAT-3113 and COLL-11")
     assert outcome == "unopened-partial"
     assert "PLAT-3113" in msg
     assert "COLL-11" not in msg, "COLL-11 has no resolved page to name"
     assert "Incomplete coverage" in msg
     assert "claimed by more than one committed page" in msg
+    assert details == {}, "the message already carries the cause; no need to duplicate it"
+
+
+def test_no_page_partial_names_its_cause_in_log_details(live, vault, monkeypatch):
+    """Finding 2 (round 2): `no-page-partial` returns no message — the branch returns
+    before the caveats are built — so before this fix a fire-log reader saw only the
+    outcome name and could not tell a truncated index enumeration (remedy: raise
+    WIKI_INDEX_CAP) apart from a colliding stem (remedy: rename a page); those are two
+    different fixes. The cause now travels as the third return element, `details`, kept
+    OUT of the outcome string on purpose — the vocabulary is already eight names long
+    and the cause composes with several of them; a field composes, a name multiplies.
+    Both causes exercised here so the two `details` shapes are visibly different, not
+    just individually non-empty.
+    """
+    _collide(vault)
+    _, outcome, details = cd.workstream_page_context(_state(), "COLL-11")
+    assert outcome == "no-page-partial"
+    assert details == {"ambiguous_keys": ["COLL-11"]}
+
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    _, outcome2, details2 = cd.workstream_page_context(_state(), "INE-857")
+    assert outcome2 == "no-page-partial"
+    assert details2 == {"truncated_indexes": 2}, \
+        "_collide added a second _index.md to the vault, so both are uncounted at cap 0"
+
+
+def test_no_page_partial_cause_reaches_the_fire_log(live, vault, monkeypatch):
+    """Finding 2's wiring half: `details` has to actually reach `log_fire`, not just the
+    return value `workstream_page_context` hands back. Drives `handle_user_prompt_submit`
+    for real — a test that only checked the return tuple would pass even if the call
+    site forgot to unpack the third element and pass it through as `**details`."""
+    _collide(vault)
+    calls = []
+    monkeypatch.setattr(
+        cd, "log_fire",
+        lambda rule, sid, action, **k: calls.append((rule, action, k)),
+    )
+    cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "work on COLL-11"})
+    rows = [c for c in calls if c[0] == "workstream_page"]
+    assert len(rows) == 1
+    _, action, details = rows[0]
+    assert action == "info", "no-page-partial produces no advisory, so this must log at info"
+    assert details == {"outcome": "no-page-partial", "ambiguous_keys": ["COLL-11"]}
 
 
 def test_no_key_in_prompt_is_a_third_state_not_clean(live):
-    assert cd.workstream_page_context(_state(), "just fix the typo") == (None, None)
+    assert cd.workstream_page_context(_state(), "just fix the typo") == (None, None, {})
 
 
 def test_fires_once_per_key_for_a_settled_key(live):
@@ -545,7 +658,14 @@ def test_scan_budget_advances_regardless_of_whether_the_scan_settles(live, vault
     permanently over-cap index file count) re-ran the same subprocess work on every
     matching prompt for the rest of the session, and WORKSTREAM_MAX_SCANS never engaged.
 
-    Arm 1 — ambiguous partial: no settling, budget still advances by one.
+    Arm 1 — ambiguous partial: no settling, budget still advances by one. Also the arm
+    that reads the counter back through `cd.load_state("s1")` rather than only from the
+    dict passed in (Finding 3, round 2): every prior assertion here read `st1[...]`,
+    the dict THIS test built and passed in, never the copy the handler actually
+    persists — so a mutation deleting the disk-persist block while leaving the
+    in-memory `state["workstream_scans"] = ...` line untouched left every such
+    assertion green while `WORKSTREAM_MAX_SCANS` silently stopped bounding anything
+    across prompts, which is the exact failure round 1 existed to fix.
     Arm 2 — CONTROL, a complete scan that DOES settle: same one-count advance, proving
     the fix relocated the increment rather than duplicating it (both arms must move, or
     an implementation that still only increments on settling would pass Arm 2 alone).
@@ -554,20 +674,22 @@ def test_scan_budget_advances_regardless_of_whether_the_scan_settles(live, vault
     _collide(vault)
 
     st1 = _state()
-    _, outcome1 = cd.workstream_page_context(st1, "COLL-11")
+    _, outcome1, _ = cd.workstream_page_context(st1, "COLL-11")
     assert outcome1 == "no-page-partial"
     assert "COLL-11" not in st1["workstream_keys_fired"]
     assert st1["workstream_scans"] == 1
+    assert cd.load_state("s1")["workstream_scans"] == 1, \
+        "the counter the handler actually persists to disk, not the dict passed in"
 
     st2 = _state()
-    _, outcome2 = cd.workstream_page_context(st2, "ZZZ-999")
+    _, outcome2, _ = cd.workstream_page_context(st2, "ZZZ-999")
     assert outcome2 == "no-page"
     assert "ZZZ-999" in st2["workstream_keys_fired"]
     assert st2["workstream_scans"] == 1
 
     monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
     st3 = _state()
-    _, outcome3 = cd.workstream_page_context(st3, "INE-857")
+    _, outcome3, _ = cd.workstream_page_context(st3, "INE-857")
     assert outcome3 == "no-page-partial"
     assert "INE-857" not in st3["workstream_keys_fired"]
     assert st3["workstream_scans"] == 1
@@ -582,7 +704,7 @@ def test_scan_budget_does_not_advance_when_every_key_is_already_settled(live):
     still fail this one.
     """
     st = _state(workstream_keys_fired=["PLAT-3113"])
-    _, outcome = cd.workstream_page_context(st, "PLAT-3113 again")
+    _, outcome, _ = cd.workstream_page_context(st, "PLAT-3113 again")
     assert outcome == "already-advised"
     assert st["workstream_scans"] == 0
 
@@ -605,7 +727,7 @@ def test_denylisted_token_alone_is_no_key_not_already_advised(live):
     CVE-2021-4034 are the same class): a fresh session naming only it named no real
     workstream key, so this must be silent and unlogged, not a false already-advised row
     written to the fire log for a key nobody was ever advised on."""
-    assert cd.workstream_page_context(_state(), "explain AES-256 padding") == (None, None)
+    assert cd.workstream_page_context(_state(), "explain AES-256 padding") == (None, None, {})
 
 
 def test_denylisted_token_plus_settled_key_still_reports_already_advised(live):
@@ -615,12 +737,13 @@ def test_denylisted_token_plus_settled_key_still_reports_already_advised(live):
     while silently losing this one — the settled key must still produce already-advised,
     not None."""
     st = _state(workstream_keys_fired=["PLAT-3113"])
-    assert cd.workstream_page_context(st, "AES-256 and PLAT-3113 again") == (None, "already-advised")
+    assert cd.workstream_page_context(st, "AES-256 and PLAT-3113 again") == (
+        None, "already-advised", {})
 
 
 def test_truncation_is_reported_in_the_message(live, monkeypatch):
     monkeypatch.setattr(cd, "WORKSTREAM_MAX_KEYS", 1)
-    msg, outcome = cd.workstream_page_context(_state(), "PLAT-3113 and INE-857 and ZZZ-999")
+    msg, outcome, _ = cd.workstream_page_context(_state(), "PLAT-3113 and INE-857 and ZZZ-999")
     assert outcome == "unopened"
     assert "Incomplete coverage" in msg and "not checked" in msg
 
@@ -640,7 +763,7 @@ def test_already_read_pages_do_not_consume_the_sample_budget(live, vault):
     _git(vault, "add", "-A")
     _git(vault, "commit", "-qm", "three pages")
     st = _state(wiki_paths_read=["brain/proj/ZQ-11-aaa.md", "brain/proj/ZQ-11-bbb.md"])
-    msg, outcome = cd.workstream_page_context(st, "ZQ-11")
+    msg, outcome, _ = cd.workstream_page_context(st, "ZQ-11")
     assert outcome == "unopened"
     assert "brain/proj/ZQ-11-ccc.md" in msg
 

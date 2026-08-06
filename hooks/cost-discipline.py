@@ -1857,7 +1857,7 @@ def workstream_page_scan(keys, repo=None):
 
 
 def workstream_page_context(state, prompt):
-    """(advisory_or_None, outcome) for the read-before-work check.
+    """(advisory_or_None, outcome, details) for the read-before-work check.
 
     Fires when the prompt names a workstream that HAS a committed vault page which this
     session has not opened. Once per key per session, not once per prompt — the trigger is
@@ -1868,7 +1868,7 @@ def workstream_page_context(state, prompt):
     `scan-budget-spent`, `unopened`, `unopened-partial`), because a check that only
     speaks when it finds something is indistinguishable from one that was never wired
     up. `unopened-partial` is `unopened` with the same advisory but an incomplete
-    index scan OR an ambiguous stem resolution behind it — the fire log needs to tell
+    index scan OR an ambiguous key resolution behind it — the fire log needs to tell
     "advised, and the search was whole" apart from "advised, and the search was
     partial" (`no-page-partial` draws the same line on the no-advisory side). No new
     outcome name exists for ambiguity specifically: it is unproven in exactly the same
@@ -1876,6 +1876,30 @@ def workstream_page_context(state, prompt):
     adding a parallel one. When the prompt names no key at all, nothing ran and the
     outcome is None — a third state, and calling it "clean" would be the vacuity this
     repo has a page about.
+
+    `details` is a small dict of extra fire-log fields, `{}` when there is nothing to
+    add. It exists because `no-page-partial` returns no message — the branch returns
+    before the caveats are built — so without it a fire-log reader sees the outcome
+    name and nothing else: it cannot tell a truncated index enumeration (remedy: raise
+    WIKI_INDEX_CAP) from a colliding stem (remedy: rename a page) apart, and those are
+    different fixes. `unopened-partial` does not need this: its message already reaches
+    the caveats and names the cause in prose. The cause is data, not a new outcome
+    string — the vocabulary above is already eight names long and the cause composes
+    with several of them; a field composes, a name multiplies.
+
+    Truncated-index and ambiguous-stem are also DIFFERENT KINDS of "partial", and that
+    difference is load-bearing for what settles, not just for what gets logged. A
+    truncated index enumeration is a property of the SCAN: some index files were never
+    read, so EVERY key in this batch has an unproven page list, including ones that
+    already have a hit — settling any of them would be a claim the scan cannot support.
+    An ambiguous stem is a property of a KEY: a colliding basename affects only the
+    keys whose rows actually link it. Gating settlement for the whole batch on
+    `ambiguous` being merely non-empty — as an earlier version of this fix did —
+    punished keys that never went near the stem: one colliding page name in a prompt
+    naming three keys silently froze the other two, unrelated to any collision, for the
+    rest of the session. Settlement below is filtered per key on `key in
+    scan["ambiguous_keys"]`; `truncated_indexes` keeps its batch-wide gate exactly as
+    it already was.
     """
     settled = state.setdefault("workstream_keys_fired", [])
     keys, truncated_keys = workstream_keys(prompt, exclude=settled)
@@ -1886,9 +1910,9 @@ def workstream_page_context(state, prompt):
         # SHA3-256, RFC-2119, CVE-2021-4034), which reported "already-advised" for
         # prompts that never named a real key at all.
         all_keys, _ = workstream_keys(prompt)
-        return (None, "already-advised" if all_keys else None)
+        return (None, "already-advised" if all_keys else None, {})
     if state.get("workstream_scans", 0) >= WORKSTREAM_MAX_SCANS:
-        return (None, "scan-budget-spent")
+        return (None, "scan-budget-spent", {})
 
     fresh = keys
 
@@ -1939,7 +1963,7 @@ def workstream_page_context(state, prompt):
         # nowhere — the packaged default does — rescans and writes a fire-log line on every
         # prompt naming anything ticket-shaped, forever, burying the outcomes that matter.
         _mark(fresh)
-        return (None, "skipped")
+        return (None, "skipped", {})
 
     hits = scan["hits"]
     ambiguous = scan["ambiguous_keys"]
@@ -1959,7 +1983,7 @@ def workstream_page_context(state, prompt):
             unopened[key] = not_read[:WORKSTREAM_SAMPLE]
 
     if not unopened:
-        if scan["truncated_indexes"] or ambiguous:
+        if scan["truncated_indexes"]:
             # The scan did not finish enumerating the population it would need to claim
             # "no page exists" — the higher-recall (index) half was cut short by
             # WIKI_INDEX_CAP, not merely thin. This is BATCH-level, not per-key: a key
@@ -1974,37 +1998,44 @@ def workstream_page_context(state, prompt):
             # same keys and the scan budget burns down without ever reaching a verdict.
             # No advisory is produced on this branch either way, so both the no-hits
             # and the already-read-hit case collapse into the same qualified outcome.
-            #
-            # `ambiguous` joins the same gate for a different reason: the index half was
-            # read in full, but at least one row named a stem this scan cannot tell
-            # apart between two or more pages. "No page" would be a false claim about a
-            # key the vault does document, so it gets the same qualified outcome as a
-            # truncated enumeration rather than a claim this scan cannot support.
-            return (None, "no-page-partial")
+            return (None, "no-page-partial", {"truncated_indexes": scan["truncated_indexes"]})
+        if ambiguous:
+            # Ambiguity is a KEY property, not a batch one (see the docstring) — settle
+            # every fresh key EXCEPT the ones whose own resolution collided. A key that
+            # stays ambiguous keeps re-scanning on every prompt that names it, bounded
+            # by WORKSTREAM_MAX_SCANS (genuinely bounded since round 1 fixed the
+            # counter), until it stops colliding or the vault disambiguates it.
+            clean = [k for k in fresh if k not in ambiguous]
+            if clean:
+                _mark(clean)
+            return (None, "no-page-partial", {"ambiguous_keys": sorted(ambiguous)})
         # Settled: nothing more to say about these keys this session.
         _mark(fresh)
-        return (None, "opened" if hits else "no-page")
+        return (None, "opened" if hits else "no-page", {})
 
     # An UNOPENED key is deliberately NOT settled. `additionalContext` has been measured
     # being dropped mid-session while every stamp advanced perfectly, and marking here
     # would burn the key on a message that may never arrive — losing precisely the first
     # prompt about that workstream, which is the one this check exists for. It re-fires
     # until the page is actually opened, which also silences it.
-    if scan["truncated_indexes"] or ambiguous:
+    if scan["truncated_indexes"]:
         # Same reasoning as the no-advisory branch above, extended to the keys that DID
         # settle there before this fix: a truncated index enumeration means the page
         # list for those keys is unproven too, so `_mark` must not run for them either.
         # The advisory below still fires — a partial scan that found something real is
         # more useful than silence — but the outcome is tagged so a fire-log reader can
         # tell "advised, and the search was whole" from "advised, and the search was
-        # partial". `ambiguous` joins this gate too: a key whose resolution hit a
-        # colliding stem is exactly as unproven as one behind an unread index file, and
-        # settling it would let the vault's next matching prompt go silent about a
-        # workstream that was never actually confirmed either way.
+        # partial". Still batch-wide: this is the SCAN being incomplete, not a per-key
+        # property.
         outcome = "unopened-partial"
     else:
-        _mark([k for k in fresh if k not in unopened])
-        outcome = "unopened"
+        # Ambiguity, unlike truncation, filters PER KEY: a key whose own resolution
+        # collided (`k in ambiguous`) stays unsettled — its page list may be missing the
+        # page the collision hid — but a batch-mate that never touched the colliding
+        # stem settles normally. `k not in unopened` is unchanged: an unopened key is
+        # never settled regardless of ambiguity, per the comment above.
+        _mark([k for k in fresh if k not in unopened and k not in ambiguous])
+        outcome = "unopened-partial" if ambiguous else "unopened"
 
     listed = "; ".join(
         f"**{key}** → {', '.join(paths)}" for key, paths in sorted(unopened.items())
@@ -2029,6 +2060,7 @@ def workstream_page_context(state, prompt):
         f"Not a gate — nothing is blocked. It arrives now because the decision it informs "
         f"happens before anyone thinks to consult a wiki.",
         outcome,
+        {},  # the message above already carries the cause in prose; see the docstring
     )
 
 
@@ -2416,7 +2448,7 @@ def handle_user_prompt_submit(payload):
         except Exception:
             pass  # ditto — its own handler, for the same reason as the others
         try:
-            ws, outcome = workstream_page_context(state, prompt)
+            ws, outcome, ws_details = workstream_page_context(state, prompt)
             if ws:
                 parts.append(ws)
             if outcome:
@@ -2425,10 +2457,17 @@ def handle_user_prompt_submit(payload):
                 # name comparison its three siblings above use — when this check gained
                 # `unopened-partial`, a fired advisory silently began logging at info,
                 # and nothing failed. Do not extend this predicate for a new outcome.
+                #
+                # `ws_details` carries the CAUSE for outcomes whose message is None
+                # (`no-page-partial`) — a truncated index count, or the specific
+                # ambiguous keys — so a fire-log reader can tell "raise the cap" from
+                # "rename a page" apart without a message to parse. `{}` for every other
+                # outcome, so this is a no-op there.
                 log_fire(
                     "workstream_page", session_id,
                     "warn" if ws else "info",
                     outcome=outcome,
+                    **ws_details,
                 )
         except Exception:
             pass  # ditto — a vault lookup is never worth a broken prompt
