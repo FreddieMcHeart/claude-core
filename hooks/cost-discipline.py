@@ -111,6 +111,60 @@ WIKI_MAX_DANGLING = 0     # any dangling row is a defect; raise only for a delib
 WIKI_SAMPLE_COUNT = 3     # how many dangling rows to name in the nudge
 WIKI_INDEX_CAP = 24       # index files inspected per scan — a bound, and it is REPORTED when hit
 
+# ---- Read-before-work (2026-08-04) ----
+# Writing to the vault has an external trigger — the operator says "write this down".
+# Reading it has none: it is entirely the agent's own initiative. Measured across two
+# vaults on 2026-08-04, under the one predicate that needs no heuristics and is identical
+# in both harnesses (Read tool vs Write+Edit): 3.58 writes per deliberate read in one,
+# 4.05 in the other. Within 13% of each other, so the asymmetry is a property of the
+# mechanism rather than of either vault.
+#
+# The fix is NOT a prose rule saying "consult the wiki first". This repo already documents
+# why: the read floor is enforced by a hook that hard-blocks, the over-delegation ceiling
+# is prose, and the audit's own finding is that the one with teeth works and the one
+# without does not. A rule that fires only when the agent remembers to consult it has the
+# same defect as a check with no failing input.
+#
+# So this arrives BEFORE the decision, unprompted, naming the exact path — which is the
+# property the prose lacks, and is deliberately NOT called enforcement. It cannot block:
+# blocking a user's prompt would be hostile and UserPromptSubmit is the wrong place for a
+# gate. What it changes is WHEN the knowledge arrives, which is the whole of the argument
+# in the cloud-auth precedent: knowledge must load before the decision; enforcement only
+# fires on the attempt.
+# The trailing guard is (?![A-Za-z0-9]) rather than \b: `_` is a word character, so \b
+# silently refused `PLAT-3113_notes`, which is how branch names and filenames spell it.
+# The digit bound is 1-9: one digit is a real key (`PLAT-7`), and the earlier 1-6 bound
+# did not TRUNCATE a longer number, it dropped it — every backtrack failed the
+# lookahead, so `PLAT-1234567` produced no key at all. Large Jira instances reach seven.
+WORKSTREAM_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,9})(?![A-Za-z0-9])")
+# Prefixes that are never ticket keys. This list is an OPTIMISATION, not the filter — the
+# real filter is that a key with no page produces silence, so a novel false positive costs
+# one bounded scan and says nothing. Keeping it short on purpose: a long denylist would
+# start suppressing real project prefixes nobody remembered to check.
+#
+# Matched against the prefix with TRAILING DIGITS STRIPPED, because the first version
+# compared the whole group and so `SHA3-256`, `SHA2-512` and `HMAC-256` walked straight
+# past a list containing `SHA`. Verified by execution, not by reading the regex.
+WORKSTREAM_KEY_DENY = frozenset({
+    "UTF", "SHA", "HMAC", "AES", "RSA", "ECDSA", "ISO", "RFC", "GPT", "HTTP", "IPV",
+    "SSE", "TLS", "SSL", "MD", "CVE", "UTC", "ASCII", "BASE", "FIPS", "NIST", "RS", "RJ",
+    "MPEG", "X", "ARM", "RTX", "GTX", "COVID", "PEP", "Q", "H", "CI", "PY", "ES", "USB",
+})
+WORKSTREAM_MAX_KEYS = 3    # keys acted on per prompt — a bound, and it is REPORTED when hit
+WORKSTREAM_SAMPLE = 2      # pages named per key — also REPORTED when it truncates
+WORKSTREAM_SCAN_BUDGET = 2.0   # seconds for the WHOLE scan, not per subprocess. The
+                               # per-call HYGIENE_GIT_TIMEOUT bounds one `git show`; with a
+                               # 24-file index cap that composed to a 75s worst case on the
+                               # single event where latency is most visible. An aggregate
+                               # deadline is the bound that actually matters.
+WORKSTREAM_MAX_SCANS = 24      # backstop: scans per session. Once-per-key already bounds
+                               # this by distinct keys; this catches a pathological prompt
+                               # stream that the per-key rule cannot.
+WIKI_READ_PATHS_CAP = 60   # vault-RELATIVE paths, not absolute. The state doc is
+                           # re-serialised on every PreToolUse, so this list is re-written
+                           # on every tool call — the exact growth pattern the ledger's
+                           # bucket comment rejects. 60 relative paths is ~2KB, not ~16KB.
+
 # ---- Dated claims (2026-07-27) ----
 # Some statements in this repo are true on a date and false afterwards, and they
 # decay SILENTLY: nothing raises, no test fails, the prose just stops being true.
@@ -500,6 +554,26 @@ def new_state(session_id):
         "dispatches_blocked_no_model": 0,
         "agent_models": {},
         "wiki_read_count": 0,
+        "wiki_paths_read": [],       # read-before-work: WHICH vault pages were opened, as
+                                     # vault-RELATIVE paths. The count alone cannot answer
+                                     # "did you open the page for THIS ticket", which is the
+                                     # only question the advisory needs. Relative, not
+                                     # absolute, because this list is re-serialised on every
+                                     # PreToolUse. Bounded by WIKI_READ_PATHS_CAP.
+        "wiki_paths_read_evicted": False,  # read-before-work: has the cap above ever
+                                     # DROPPED an entry this session. The list is read as
+                                     # proof of a negative ("this page is not in it, so it
+                                     # was never opened"), and once anything has been
+                                     # evicted that inference is unsound. Recorded rather
+                                     # than papered over with a larger cap, which would
+                                     # only move the same defect further into the session.
+        "workstream_keys_fired": [], # read-before-work: keys SETTLED this session — looked
+                                     # for and nothing further to say. An unopened key is
+                                     # deliberately absent, so it re-fires until the page is
+                                     # opened rather than being burned on a message that may
+                                     # not have been delivered.
+        "workstream_scans": 0,       # read-before-work: git scans run, capped by
+                                     # WORKSTREAM_MAX_SCANS as a backstop under once-per-key
         "mech_bash_on_opus_streak": 0,
         "repo_roots_seen": [],   # Layer 3: distinct "<group>/<repo>" roots read inline
         "rlm_active": False,     # Layer 3 suppressor: a Workflow dispatch happened (NEW-2)
@@ -1560,6 +1634,564 @@ def wiki_index_context(state):
     )
 
 
+def _vault_relative(path):
+    """An absolute Read path → its vault-relative form, or None if it is not in the vault.
+
+    Two prefixes, not one. `_WIKI_PATH` is the canonical clone, but this repo mounts the
+    same vault at `docs/core/` — a symlink on this machine — so the identical page is
+    reachable under two absolute paths. Recording only the first meant a Read through the
+    mount was invisible, and the advisory would then assert "this session has not opened
+    it" about a page the session had just opened. That is a false statement in the one
+    sentence the check exists to make, not merely a missed suppression.
+    """
+    if not path:
+        return None
+    if (_WIKI_PATH + "/") in path:
+        return path.split(_WIKI_PATH + "/", 1)[1]
+    if "/docs/core/" in path:
+        return path.split("/docs/core/", 1)[1]
+    return None
+
+
+def workstream_keys(prompt, exclude=()):
+    """Ticket-shaped keys in the prompt, deduped, in order, bounded.
+
+    `exclude` holds keys already settled this session. They are skipped DURING
+    accumulation, not after, because the bound must apply to the keys that can still
+    be acted on. Reproduced before this argument existed: a prompt naming four keys
+    settled the first three on prompt 1, and the fourth — which had a committed page —
+    was unreachable for the rest of the session, since `workstream_keys` truncated to
+    three by appearance order and the caller filtered afterwards.
+
+    Returns (keys, truncated_count). The bound is REPORTED by the caller when hit,
+    because a silently truncated list is a coverage claim nobody can check.
+    """
+    excluded = set(exclude)
+    seen, order = set(), []
+    for m in WORKSTREAM_KEY_RE.finditer(prompt or ""):
+        # Strip trailing digits before the denylist lookup: the prefix of `SHA3-256` is
+        # `SHA3`, and comparing the whole group let every decorated variant of a denied
+        # prefix through.
+        if m.group(1).rstrip("0123456789") in WORKSTREAM_KEY_DENY:
+            continue
+        key = m.group(0)
+        if key in seen or key in excluded:
+            continue
+        seen.add(key)
+        # Bounded DURING accumulation, not after. The first version appended to a list and
+        # sliced at the end, so membership was a linear scan over an unbounded list — a
+        # pasted CI log with thousands of distinct keys made this quadratic on the
+        # prompt-submit hot path, before any git call. Count the remainder instead.
+        if len(order) < WORKSTREAM_MAX_KEYS:
+            order.append(key)
+    return order, max(0, len(seen) - len(order))
+
+
+def workstream_page_scan(keys, repo=None):
+    """{"hits": {...}, "truncated_indexes": n, "ambiguous_keys": {...}}, or None.
+
+    `ambiguous_keys` is a set of the keys (from `keys`) whose resolution hit a bare
+    wikilink stem that names more than one committed page (see `stems` below). This is
+    NOT the same population as a dangling row: a row pointing at a page that does not
+    exist has a definite answer — no page — and belongs to `truncated_indexes`'s sibling,
+    silence. An ambiguous stem has pages, plural, and no way to say which one; folding it
+    into "no hits" would let the caller assert "no page exists" about a key the vault
+    actually documents, and folding it into `truncated_indexes` would say "an index file
+    was not inspected" about a file that was read in full. Neither statement is true, so
+    it gets its own count.
+
+    `hits` is NOT truncated here. The caller filters out pages this session already
+    opened, and sampling before that filter let two already-read pages consume both
+    slots and hide the unread one — the check silenced by the pages the agent happened
+    to open first.
+
+    None means we COULD NOT LOOK; an empty `hits` means we looked and the vault holds
+    nothing for these keys. The index bound is RETURNED rather than applied silently,
+    matching WIKI_INDEX_CAP's own comment in this file — a truncated result that reports
+    nothing is indistinguishable from "there is no page".
+
+    None and an empty `hits` are different answers and the caller must keep them apart:
+    empty means the vault was searched and holds nothing, None means no search happened —
+    path absent, not a git repo, git missing or too slow, no commits. Reporting the second
+    as the first is a check that never looked reporting a result.
+
+    Two matchers, because pages are named by topic far more often than by ticket:
+      1. the key appears in a tracked filename;
+      2. the key appears on a row of a committed `_index.md`, whose wikilink target is
+         then the page. This is the higher-recall half and it is why the index convention
+         earns its keep.
+
+    Read from HEAD rather than from the worktree, for the same reason wiki_index_scan is:
+    a page that exists only on this machine is not a page a fresh clone can open, and the
+    advisory would be pointing at something that is not there for anyone else.
+    """
+    repo = WIKI_DIR if repo is None else Path(repo)
+    if not keys or not repo.is_dir():
+        return None
+
+    deadline = time.monotonic() + WORKSTREAM_SCAN_BUDGET
+
+    def git(*args):
+        if time.monotonic() >= deadline:
+            return None
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                capture_output=True, text=True, errors="surrogateescape",
+                timeout=max(0.1, min(HYGIENE_GIT_TIMEOUT, deadline - time.monotonic())),
+            )
+        except Exception:
+            return None
+        return proc.stdout if proc.returncode == 0 else None
+
+    listing = git("ls-tree", "-r", "HEAD", "--name-only", "-z")
+    if listing is None:
+        return None
+    tracked = {p for p in listing.split("\0") if p.endswith(".md")}
+    # NO early return on an empty `tracked`. A vault that is a git repo, has commits, and
+    # whose `ls-tree` succeeded has been SEARCHED — it simply holds no markdown. Returning
+    # the could-not-look sentinel for it merged the two states this function exists to keep
+    # apart, and the fall-through below produces exactly the right answer with no special
+    # case: no index files, no rows, `hits` empty, `truncated_indexes` zero.
+    #
+    # Harmless while `scan is None` settled unconditionally. The transient/permanent split
+    # made it cost something: an install whose vault legitimately holds no markdown stopped
+    # settling and now re-runs `git ls-tree` on every ticket-shaped prompt until the scan
+    # budget is spent — 24 subprocesses a session where there had been one. Found by a
+    # reviewer driving three vaults that differed only in their contents, which is the
+    # comparison that makes it visible; either vault alone looks correct.
+    # Bare-stem targets (`[[hot]]`) resolve through stems, exactly as wiki_index_scan does.
+    # The first version emitted `hot.md` as a repo-root path, which resolves to nothing for
+    # any page not literally at the vault root.
+    #
+    # {stem: path}, with an AMBIGUOUS stem mapped to None rather than to an arbitrary
+    # winner. `tracked` is a set, so a dict comprehension over it let a colliding
+    # basename resolve differently between processes — the same input answering
+    # z/dup.md, a/dup.md, z/dup.md across three runs. Determinism would only make the
+    # wrong answer reliable; the advisory states this path as fact, so an ambiguous
+    # stem must resolve to nothing.
+    stems = {}
+    for p in tracked:
+        stem = p[:-3].rsplit("/", 1)[-1]
+        stems[stem] = None if stem in stems else p
+
+    index_paths = sorted(p for p in tracked if p.rsplit("/", 1)[-1] in WIKI_INDEX_NAMES)
+    index_rows, unread = [], 0
+    # Split by CAUSE, because the three have three different remedies and the sum has
+    # none. `truncated_indexes` reports "N index file(s) not inspected", which reads as
+    # the cap — so a reader who raises WIKI_INDEX_CAP in response to a spent scan budget
+    # or a malformed fence changes nothing and has no way to find that out. The sum is
+    # kept as the gate (every consumer of it is asking the one question "was the
+    # enumeration whole", for which the total is exactly right); the breakdown rides
+    # alongside it for whoever has to act.
+    cause_unreadable, cause_unterminated = 0, 0
+    for path in index_paths[:WIKI_INDEX_CAP]:
+        content = git("show", f"HEAD:{path}")
+        if content is None:
+            unread += 1
+            cause_unreadable += 1
+            continue
+        # Parsed ONCE per file rather than once per key: the strip, the split and the
+        # fence walk depend only on the content, and sitting inside `for key in keys`
+        # re-ran them WORKSTREAM_MAX_KEYS times against the same 2s budget.
+        body = _HTML_COMMENT_RE.sub("", content)
+        fence, marker = False, ""
+        for line in body.splitlines():
+            stripped = line.lstrip()
+            if fence:
+                if stripped.startswith(marker):
+                    fence, marker = False, ""
+                continue
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                fence, marker = True, stripped[:3]
+                continue
+            if not stripped.startswith("|"):
+                continue
+            cells = stripped.split("|")
+            first = cells[1] if len(cells) > 1 else ""
+            m = _WIKILINK_RE.search(_INLINE_CODE_RE.sub("", first))
+            if m:
+                index_rows.append((stripped.lower(), m.group(1)))
+        if fence:
+            # An unterminated fence means the rest of the file was skipped. Reporting
+            # it is the whole point: `_wikilinks_in` says "skipping the rest of the
+            # file would under-report — the permissive direction — and silence from a
+            # check that stopped reading is the failure this exists to avoid."
+            unread += 1
+            cause_unterminated += 1
+    cause_over_cap = max(0, len(index_paths) - WIKI_INDEX_CAP)
+    truncated_indexes = cause_over_cap + unread
+    truncated_index_causes = {
+        k: v for k, v in (
+            ("index_over_cap", cause_over_cap),
+            ("index_unreadable", cause_unreadable),
+            ("index_unterminated_fence", cause_unterminated),
+        ) if v
+    }
+
+    # Populated by `_resolve` below, keyed by the RAW (un-normalized) target string, so
+    # the per-key loop can ask "was this exact call ambiguous?" without re-deriving the
+    # stem lookup. `_resolve`'s return value stays plain None either way — "not found"
+    # and "found more than one" are the same answer to a caller that only wants a path —
+    # this is the side channel that lets the scan tell them apart.
+    ambiguous_targets = set()
+
+    def _resolve(target):
+        """A wikilink target → the tracked path it names, or None if it names nothing —
+        either because no tracked page matches, or because the bare stem matches more
+        than one (`stems[stem] is None`, set above). Both are None here; `ambiguous_targets`
+        records which raw targets hit the second case, for the per-key loop below.
+
+        This is the check the first version skipped entirely, and skipping it meant a
+        committed index row pointing at an UNCOMMITTED page — the precise defect
+        wiki_index_scan exists to detect, on the same tree — was advertised as a page to
+        open. Reproduced: `QQQ-42` returned `brain/ghost-page.md`, which is not in HEAD.
+        """
+        raw = target
+        target = target.split("|", 1)[0].split("#", 1)[0].strip()
+        if not target or "://" in target:
+            return None
+        if "/" in target:
+            if target in tracked:
+                return target
+            if f"{target}.md" in tracked:
+                return f"{target}.md"
+            return None
+        resolved = stems.get(target)
+        if resolved is None and target in stems:
+            ambiguous_targets.add(raw)
+        return resolved
+
+    hits = {}
+    ambiguous_keys = set()
+    lowered = [(p, p.lower()) for p in tracked]
+    for key in keys:
+        kl = re.escape(key.lower())
+        # Bounded on both sides: a bare substring made `PLAT-311` match
+        # `plat-3113-rtbf.md`, so a real key that is a numeric prefix of another real key
+        # resolved to the wrong page and the advisory stated it as fact.
+        key_re = re.compile(r"(?<![a-z0-9])" + kl + r"(?![a-z0-9])")
+        found = sorted(p for p, pl in lowered if key_re.search(pl))
+        # `index_rows` was parsed once per file above (fence walk, first-cell wikilink);
+        # this is just the per-key filter over that pre-parsed set.
+        for row_lower, target in index_rows:
+            if not key_re.search(row_lower):
+                continue
+            resolved = _resolve(target)
+            if resolved and resolved not in found:
+                found.append(resolved)
+            elif target in ambiguous_targets:
+                # This row's wikilink names a stem that matches more than one
+                # committed page. `_resolve` already answered None for it — same
+                # as "not found" — but this key is NOT "no page for this key": a
+                # page exists, we just cannot say which, and stating the wrong one
+                # is worse than staying silent (see the `stems` comment above).
+                ambiguous_keys.add(key)
+        if found:
+            hits[key] = found
+    return {
+        "hits": hits,
+        "truncated_indexes": truncated_indexes,
+        "truncated_index_causes": truncated_index_causes,
+        "ambiguous_keys": ambiguous_keys,
+    }
+
+
+def workstream_page_context(state, prompt):
+    """(advisory_or_None, outcome, details) for the read-before-work check.
+
+    Fires when the prompt names a workstream that HAS a committed vault page which this
+    session has not opened. Once per key per session, not once per prompt — the trigger is
+    content, not a counter, so a prompt-interval throttle would either nag or miss.
+
+    `outcome` is logged on every run that had a key to act on, including the silent
+    ones (`no-page`, `no-page-partial`, `opened`, `already-advised`, `skipped`,
+    `scan-budget-spent`, `unopened`, `unopened-partial`), because a check that only
+    speaks when it finds something is indistinguishable from one that was never wired
+    up. `unopened-partial` is `unopened` with the same advisory but an incomplete
+    index scan OR an ambiguous key resolution behind it — the fire log needs to tell
+    "advised, and the search was whole" apart from "advised, and the search was
+    partial" (`no-page-partial` draws the same line on the no-advisory side). No new
+    outcome name exists for ambiguity specifically: it is unproven in exactly the same
+    sense a truncated index enumeration is, so it reuses that vocabulary rather than
+    adding a parallel one. When the prompt names no key at all, nothing ran and the
+    outcome is None — a third state, and calling it "clean" would be the vacuity this
+    repo has a page about.
+
+    `details` is a small dict of extra fire-log fields, `{}` when there is nothing to
+    add. It exists because `no-page-partial` returns no message — the branch returns
+    before the caveats are built — so without it a fire-log reader sees the outcome
+    name and nothing else: it cannot tell a truncated index enumeration (remedy: raise
+    WIKI_INDEX_CAP) from a colliding stem (remedy: rename a page) apart, and those are
+    different fixes. `unopened-partial` does not need this: its message already reaches
+    the caveats and names the cause in prose. The cause is data, not a new outcome
+    string — the vocabulary above is already eight names long and the cause composes
+    with several of them; a field composes, a name multiplies.
+
+    Truncated-index and ambiguous-stem are also DIFFERENT KINDS of "partial", and that
+    difference is load-bearing for what settles, not just for what gets logged. A
+    truncated index enumeration is a property of the SCAN: some index files were never
+    read, so EVERY key in this batch has an unproven page list, including ones that
+    already have a hit — settling any of them would be a claim the scan cannot support.
+    An ambiguous stem is a property of a KEY: a colliding basename affects only the
+    keys whose rows actually link it. Gating settlement for the whole batch on
+    `ambiguous` being merely non-empty — as an earlier version of this fix did —
+    punished keys that never went near the stem: one colliding page name in a prompt
+    naming three keys silently froze the other two, unrelated to any collision, for the
+    rest of the session. Settlement below is filtered per key on `key in
+    scan["ambiguous_keys"]`; `truncated_indexes` keeps its batch-wide gate exactly as
+    it already was.
+    """
+    settled = state.setdefault("workstream_keys_fired", [])
+    keys, truncated_keys = workstream_keys(prompt, exclude=settled)
+    if not keys:
+        # Either the prompt named no key at all, or every key it named is settled. Decide
+        # using the SAME denylist-aware extraction as everything else in this function,
+        # not a raw shape regex — a raw search matches denylisted prefixes too (AES-256,
+        # SHA3-256, RFC-2119, CVE-2021-4034), which reported "already-advised" for
+        # prompts that never named a real key at all.
+        # `already-SETTLED`, not `already-advised`. A key is settled once it has been
+        # LOOKED FOR, whatever the answer — and the common answer is `no-page`, which
+        # shows the user nothing. So the old name asserted that an advisory had fired
+        # for a key that, in the majority case, never produced one. Reproduced
+        # 2026-08-06: two prompts naming ZZZ-999 gave `no-page` then `already-advised`,
+        # with no message shown either time. Same family as the severity predicate this
+        # branch already repaired — a name standing in for the property, and diverging
+        # from it in the case that happens most.
+        #
+        # The STATE FIELD keeps its name (`workstream_keys_fired`) deliberately: it is
+        # persisted on disk, and renaming it would silently discard the settled set of
+        # every session whose state file predates this commit, re-firing advisories that
+        # were already answered. A log label is free to change; a storage key is not.
+        all_keys, _ = workstream_keys(prompt)
+        return (None, "already-settled" if all_keys else None, {})
+    if state.get("workstream_scans", 0) >= WORKSTREAM_MAX_SCANS:
+        return (None, "scan-budget-spent", {})
+
+    fresh = keys
+
+    scan = workstream_page_scan(fresh)
+
+    # `workstream_scans` is a COST budget: it bounds how much git subprocess work one
+    # session can provoke, not how many keys got settled. Those used to coincide — every
+    # branch below that called `_mark` also happened to be the only branches that ran a
+    # scan — until the ambiguity fix added two outcomes (`no-page-partial`,
+    # `unopened-partial`) that run a full scan (a `git ls-tree` plus a `git show` per
+    # index file) but settle nothing. Keying the counter on settling instead of on the
+    # scan meant those two outcomes did real subprocess work on EVERY matching prompt,
+    # for the rest of the session, with WORKSTREAM_MAX_SCANS never actually engaging —
+    # unbounded git work on the UserPromptSubmit hot path, the same shape of bug as a
+    # fire-log severity keyed on an outcome name instead of on whether an advisory
+    # fired. Increment exactly once per call that reaches a scan, before any branch
+    # decides what to do with the result — re-loading fresh state first for the same
+    # reason `_mark` below does: sub-agents share this session_id and do their own
+    # unlocked load-modify-save, so writing back a pre-scan snapshot would revert
+    # counters they advanced during the scan's subprocess time.
+    try:
+        live = load_state(state.get("session_id"))
+        live["workstream_scans"] = live.get("workstream_scans", 0) + 1
+        save_state(live)
+    except Exception:
+        pass  # the advisory/outcome below is still right; only the budget count is lost
+    state["workstream_scans"] = state.get("workstream_scans", 0) + 1
+
+    # Settling is a SEPARATE event from scanning (see above) — `_mark` now only ever
+    # touches `workstream_keys_fired`.
+    def _mark(settled_keys):
+        try:
+            live = load_state(state.get("session_id"))
+            lst = live.setdefault("workstream_keys_fired", [])
+            for k in settled_keys:
+                if k not in lst:
+                    lst.append(k)
+            del lst[:-WORKSTREAM_MAX_SCANS * 2]
+            save_state(live)
+        except Exception:
+            pass  # the advisory is still right for this prompt; only once-per-key is lost
+        for k in settled_keys:
+            if k not in settled:
+                settled.append(k)
+
+    def _key_caveat():
+        """`truncated_keys` as a details fragment, for EVERY return that has one.
+
+        The per-prompt key bound was computed once at the top and then reported at
+        exactly one of the five return sites — the advisory branch, in prose. The other
+        four built their `details` from scratch and dropped it, though the variable was
+        in scope at each. So a prompt naming five keys whose first three all resolved
+        `no-page` logged a clean verdict with no trace that two keys were never looked at
+        — a silent truncation, which is the one thing every bound in this file is
+        required not to be.
+        """
+        return {"truncated_keys": truncated_keys} if truncated_keys else {}
+
+    def _partial_name(found):
+        """`opened-partial` vs `no-page-partial`, decided by whether a page was FOUND.
+
+        Both partial branches used to return `no-page-partial` unconditionally, without
+        consulting `hits`. `if not unopened:` is true in two distinguishable situations —
+        the scan found nothing, and the scan found a page that this session had already
+        opened — and only the first is what the name says. Reproduced 2026-08-06 by
+        probing the truncated branch: `hits={'PLAT-3113': ['brain/proj/PLAT-3113-...md']}`
+        while the outcome read `no-page-partial`. A page existed, it was open, and the
+        fire log recorded that there was no page.
+
+        The user-visible behaviour was never wrong — no advisory fires on either branch,
+        which is what the surrounding comment defends. The INSTRUMENT was wrong, and the
+        fire log is the one number this repo calls trustworthy. This mirrors the
+        `opened` / `no-page` split the complete path already makes, so it is the
+        vocabulary's own logic rather than a new invention.
+        """
+        return "opened-partial" if found else "no-page-partial"
+
+    if scan is None:
+        # "Could not look" comes in two kinds and they must not settle alike.
+        #
+        # PERMANENT — the vault is not a usable git repo at all (the packaged default
+        # points nowhere). Settle: otherwise every prompt naming anything ticket-shaped
+        # writes a fire-log line forever, burying the outcomes that matter. That was the
+        # whole of the original justification, and for this half it still holds.
+        #
+        # TRANSIENT — git was slow, the scan budget ran out, a subprocess died. Settling
+        # here made ONE unlucky timeout blind the feature for that key for the rest of the
+        # session, silently, on a key whose page exists and is unopened. Reproduced
+        # 2026-08-06 with a zeroed budget: outcome `skipped` and the key marked, where the
+        # control arm with the same key and no failure produced `unopened` WITH an advisory.
+        # That is the exact failure this whole check is built to prevent, caused by its own
+        # guard.
+        #
+        # Not settling used to mean unbounded rescanning, which is why the original code
+        # settled both. It no longer does: `workstream_scans` was moved above to increment
+        # on every call that reaches a scan — including this one, verified by execution —
+        # so a permanently-transient failure costs at most WORKSTREAM_MAX_SCANS scans and
+        # then `scan-budget-spent` takes over. The justification in the old comment had
+        # outlived the condition that produced it, and nobody re-read it when the counter
+        # moved.
+        if not (WIKI_DIR.is_dir() and (WIKI_DIR / ".git").exists()):
+            _mark(fresh)
+            return (None, "skipped", {"reason": "no_vault"})
+        return (None, "skipped-partial", {"reason": "scan_failed", **_key_caveat()})
+
+    hits = scan["hits"]
+    ambiguous = scan["ambiguous_keys"]
+    read = state.get("wiki_paths_read") or []
+    read_partial = bool(state.get("wiki_paths_read_evicted"))
+    unopened, truncated_pages = {}, 0
+    for key, paths in hits.items():
+        # Anchored: bare endswith matched across a path boundary, so a Read of
+        # `snapshot.md` credited `hot.md` as opened and silenced the advisory with no
+        # trace. That is the over-crediting direction, which this check must not have.
+        not_read = [p for p in paths if not any(r == p or r.endswith("/" + p) for r in read)]
+        if not_read:
+            # Sampled HERE, after the already-read filter, not in the scan. Sampling
+            # before that filter let already-read pages consume the sample budget and
+            # hide the one page that still mattered — see workstream_page_scan's
+            # docstring for the reproduction.
+            truncated_pages += max(0, len(not_read) - WORKSTREAM_SAMPLE)
+            unopened[key] = not_read[:WORKSTREAM_SAMPLE]
+
+    if not unopened:
+        if scan["truncated_indexes"]:
+            # The scan did not finish enumerating the population it would need to claim
+            # "no page exists" — the higher-recall (index) half was cut short by
+            # WIKI_INDEX_CAP, not merely thin. This is BATCH-level, not per-key: a key
+            # that already has a hit (and so isn't in `unopened`) may still have
+            # index-only pages the truncated half never read, so its page list is
+            # unproven too — "opened" is exactly as unsupported a claim as "no-page"
+            # here. One rule, no per-key carve-out for keys with a hit. Note
+            # `truncated_keys` does NOT feed the GATE: it says other keys in the prompt
+            # went unchecked, not that the vault enumeration for THESE keys was
+            # partial, and treating it as incomplete-too would mean a prompt naming
+            # several keys never settles any of them — the next prompt re-selects the
+            # same keys and the scan budget burns down without ever reaching a verdict.
+            # It is still REPORTED in details, because a bound that bit must be visible.
+            return (
+                None,
+                _partial_name(hits),
+                {"truncated_indexes": scan["truncated_indexes"],
+                 **scan["truncated_index_causes"], **_key_caveat()},
+            )
+        if ambiguous:
+            # Ambiguity is a KEY property, not a batch one (see the docstring) — settle
+            # every fresh key EXCEPT the ones whose own resolution collided. A key that
+            # stays ambiguous keeps re-scanning on every prompt that names it, bounded
+            # by WORKSTREAM_MAX_SCANS (genuinely bounded since round 1 fixed the
+            # counter), until it stops colliding or the vault disambiguates it.
+            clean = [k for k in fresh if k not in ambiguous]
+            if clean:
+                _mark(clean)
+            return (
+                None,
+                _partial_name(hits),
+                {"ambiguous_keys": sorted(ambiguous), **_key_caveat()},
+            )
+        # Settled: nothing more to say about these keys this session.
+        _mark(fresh)
+        return (None, "opened" if hits else "no-page", _key_caveat())
+
+    # An UNOPENED key is deliberately NOT settled. `additionalContext` has been measured
+    # being dropped mid-session while every stamp advanced perfectly, and marking here
+    # would burn the key on a message that may never arrive — losing precisely the first
+    # prompt about that workstream, which is the one this check exists for. It re-fires
+    # until the page is actually opened, which also silences it.
+    if scan["truncated_indexes"]:
+        # Same reasoning as the no-advisory branch above, extended to the keys that DID
+        # settle there before this fix: a truncated index enumeration means the page
+        # list for those keys is unproven too, so `_mark` must not run for them either.
+        # The advisory below still fires — a partial scan that found something real is
+        # more useful than silence — but the outcome is tagged so a fire-log reader can
+        # tell "advised, and the search was whole" from "advised, and the search was
+        # partial". Still batch-wide: this is the SCAN being incomplete, not a per-key
+        # property.
+        outcome = "unopened-partial"
+    else:
+        # Ambiguity, unlike truncation, filters PER KEY: a key whose own resolution
+        # collided (`k in ambiguous`) stays unsettled — its page list may be missing the
+        # page the collision hid — but a batch-mate that never touched the colliding
+        # stem settles normally. `k not in unopened` is unchanged: an unopened key is
+        # never settled regardless of ambiguity, per the comment above.
+        _mark([k for k in fresh if k not in unopened and k not in ambiguous])
+        # `read_partial` qualifies the advisory but does NOT block settling, and the
+        # asymmetry is the point: eviction can only ever produce a FALSE UNOPENED (a
+        # path that was read is missing from the record), never a false opened (a path
+        # present in the record was genuinely read). So the keys being settled here —
+        # the ones NOT in `unopened` — rest on a positive membership test that eviction
+        # cannot corrupt. Only the negative inference needs the caveat.
+        outcome = "unopened-partial" if (ambiguous or read_partial) else "unopened"
+
+    listed = "; ".join(
+        f"**{key}** → {', '.join(paths)}" for key, paths in sorted(unopened.items())
+    )
+    caveats = []
+    if truncated_keys:
+        caveats.append(f"{truncated_keys} further key(s) in this prompt not checked")
+    if scan["truncated_indexes"]:
+        caveats.append(f"{scan['truncated_indexes']} index file(s) not inspected")
+    if ambiguous:
+        caveats.append(
+            f"{len(ambiguous)} key(s) named a page whose basename is claimed by more "
+            f"than one committed page"
+        )
+    if truncated_pages:
+        caveats.append(f"{truncated_pages} further page(s) not listed")
+    if read_partial:
+        caveats.append(
+            f"this session has opened more than {WIKI_READ_PATHS_CAP} vault pages, so the "
+            f"record of what was opened is partial — a page named here may in fact have "
+            f"been read earlier in the session"
+        )
+    tail = f" Incomplete coverage: {'; '.join(caveats)}." if caveats else ""
+    return (
+        f"**Read before work** — this prompt names a workstream the vault already has a page "
+        f"for, and this session has not opened it: {listed}. Open it before deciding anything; "
+        f"it holds the prior state of exactly this work.{tail}\n\n"
+        f"Not a gate — nothing is blocked. It arrives now because the decision it informs "
+        f"happens before anyone thinks to consult a wiki.",
+        outcome,
+        {},  # the message above already carries the cause in prose; see the docstring
+    )
+
+
 def _claim_status(claim, today):
     """('expired'|'due'|'current'|'malformed', days) for one dated claim.
 
@@ -1869,7 +2501,12 @@ def handle_user_prompt_submit(payload):
          are true until a date and decay silently after it.
       4. plugin version drift — same throttle; the installed claude-core-hooks
          copy vs. the repository it was built from.
-      5. Layer 2 cross-repo rlm-fanout suggestion.
+      5. read-before-work — NOT throttled by prompt count. Fires when the prompt
+         names a workstream key that has a committed vault page this session has
+         not opened, once per key. The trigger is content rather than a counter,
+         because a prompt-interval throttle would either nag or miss the one
+         prompt that mattered — the first one about that workstream.
+      6. Layer 2 cross-repo rlm-fanout suggestion.
 
     This handler now writes state (the hygiene pulse needs a prompt counter),
     which the Layer-2 path previously did not. Fail-open throughout.
@@ -1938,6 +2575,30 @@ def handle_user_prompt_submit(payload):
                 )
         except Exception:
             pass  # ditto — its own handler, for the same reason as the others
+        try:
+            ws, outcome, ws_details = workstream_page_context(state, prompt)
+            if ws:
+                parts.append(ws)
+            if outcome:
+                # Severity asks whether an advisory was SHOWN, and `ws` answers that
+                # directly; an outcome name only correlates with it. Deliberately not the
+                # name comparison its three siblings above use — when this check gained
+                # `unopened-partial`, a fired advisory silently began logging at info,
+                # and nothing failed. Do not extend this predicate for a new outcome.
+                #
+                # `ws_details` carries the CAUSE for outcomes whose message is None
+                # (`no-page-partial`) — a truncated index count, or the specific
+                # ambiguous keys — so a fire-log reader can tell "raise the cap" from
+                # "rename a page" apart without a message to parse. `{}` for every other
+                # outcome, so this is a no-op there.
+                log_fire(
+                    "workstream_page", session_id,
+                    "warn" if ws else "info",
+                    outcome=outcome,
+                    **ws_details,
+                )
+        except Exception:
+            pass  # ditto — a vault lookup is never worth a broken prompt
 
     rlm = rlm_fanout_context(prompt)
     if rlm:
@@ -2004,15 +2665,56 @@ def handle_pre_tool(payload):
     # invoked before any wiki Read" — the producer-vs-consumer gap flagged in
     # the 2026-05-12 retrospective. Counts any tool call referencing
     # the configured wiki path (_WIKI_PATH) — Read, Grep, Glob, or Bash (command-string match).
-    _wiki_path_hit = False
-    if tool_name == "Read":
-        _wiki_path_hit = (_WIKI_PATH + "/") in (tool_input.get("file_path") or "")
-    elif tool_name in ("Grep", "Glob"):
-        _wiki_path_hit = (_WIKI_PATH + "/") in (tool_input.get("path") or "")
-    elif tool_name == "Bash":
-        _wiki_path_hit = _WIKI_PATH in (tool_input.get("command") or "")
-    if _wiki_path_hit:
-        state["wiki_read_count"] = state.get("wiki_read_count", 0) + 1
+    # Guarded as one unit. This block runs on EVERY PreToolUse call for every tool in
+    # every project — the highest-frequency path in the file — and it is the one place
+    # the "one try/except per advisory" convention was not applied. The predicate it
+    # replaced did strictly less (a single substring test on a string forced by `or ""`);
+    # this version calls a helper and mutates a list in state. `main()` does catch
+    # everything and exit 0, so the prompt is never broken — but an exception here
+    # silently truncates the rest of `handle_pre_tool`, including the Layer-3 cross-repo
+    # catch-net below, with nothing reaching the fire log to say so.
+    try:
+        _wiki_path_hit = False
+        _wiki_read_target = ""
+        if tool_name == "Read":
+            _wiki_read_target = tool_input.get("file_path") or ""
+            # Via _vault_relative, so the docs/core mount counts as the vault here too. The
+            # first version tested only the canonical prefix, which meant a Read through the
+            # mount was neither counted nor recorded.
+            _wiki_path_hit = _vault_relative(_wiki_read_target) is not None
+        elif tool_name in ("Grep", "Glob"):
+            _wiki_path_hit = (_WIKI_PATH + "/") in (tool_input.get("path") or "")
+        elif tool_name == "Bash":
+            _wiki_path_hit = _WIKI_PATH in (tool_input.get("command") or "")
+        if _wiki_path_hit:
+            state["wiki_read_count"] = state.get("wiki_read_count", 0) + 1
+            # Record the path only for `Read`, deliberately. A Grep or a Bash sweep across the
+            # vault is not "you opened the page for this ticket" — it is the read-to-consult
+            # versus read-in-order-to-edit distinction that neither of the 2026-08-04
+            # measurements could make, and counting a sweep as having consulted a page would
+            # let the advisory be silenced by an operation that read nothing in particular.
+            # Under-crediting is the safe direction here: the cost is one extra nudge.
+            if tool_name == "Read" and _wiki_read_target:
+                _rel = _vault_relative(_wiki_read_target)
+                if _rel:
+                    _seen = state.setdefault("wiki_paths_read", [])
+                    if _rel not in _seen:
+                        _seen.append(_rel)
+                        # The cap EVICTS, and the eviction has to be recorded, because
+                        # this list is read as proof of a negative: "this path is not in
+                        # it" is what makes the advisory claim the page was never opened.
+                        # Once the oldest entries are dropped, that inference is unsound —
+                        # and the failure is not a mislabelled log row but a FALSE
+                        # ADVISORY shown to the user about a page they did open.
+                        # Reproduced 2026-08-06: under the cap the outcome is `opened`
+                        # and silent; over it, `unopened` with the message displayed.
+                        # Raising the cap is not the fix; the same class returns one
+                        # long session later. Recording that the record is partial is.
+                        if len(_seen) > WIKI_READ_PATHS_CAP:
+                            del _seen[:-WIKI_READ_PATHS_CAP]
+                            state["wiki_paths_read_evicted"] = True
+    except Exception:
+        pass  # never let vault bookkeeping truncate the rest of this handler
 
     # ---------- Layer 3: cross-repo inline-drift catch-net (C3) ----------
     _root = None
