@@ -138,6 +138,13 @@ def test_single_digit_issue_numbers_are_keys():
     assert cd.workstream_keys("close PLAT-7")[0] == ["PLAT-7"]
 
 
+def test_a_seven_digit_issue_number_is_not_dropped():
+    """`\\d{1,6}` plus a lookahead rejecting alnum meant every backtrack failed on a
+    7-digit number, so PLAT-1234567 was dropped ENTIRELY rather than truncated. Large
+    Jira instances reach seven digits; that is loss of a real key."""
+    assert cd.workstream_keys("close PLAT-1234567")[0] == ["PLAT-1234567"]
+
+
 def test_single_letter_prefix_is_not_a_key():
     """One letter followed by digits is overwhelmingly a list marker, a version, or a
     coordinate. The first version of the bound test used `A-11` and failed for this

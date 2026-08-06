@@ -133,9 +133,10 @@ WIKI_INDEX_CAP = 24       # index files inspected per scan — a bound, and it i
 # fires on the attempt.
 # The trailing guard is (?![A-Za-z0-9]) rather than \b: `_` is a word character, so \b
 # silently refused `PLAT-3113_notes`, which is how branch names and filenames spell it.
-# One digit is allowed — `PLAT-7` is a real key — and the cost of re-admitting `GPT-4`
-# shapes is paid by the denylist plus the page-existence filter, not by the shape.
-WORKSTREAM_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})(?![A-Za-z0-9])")
+# The digit bound is 1-9: one digit is a real key (`PLAT-7`), and the earlier 1-6 bound
+# did not TRUNCATE a longer number, it dropped it — every backtrack failed the
+# lookahead, so `PLAT-1234567` produced no key at all. Large Jira instances reach seven.
+WORKSTREAM_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,9})(?![A-Za-z0-9])")
 # Prefixes that are never ticket keys. This list is an OPTIMISATION, not the filter — the
 # real filter is that a key with no page produces silence, so a novel false positive costs
 # one bounded scan and says nothing. Keeping it short on purpose: a long denylist would
