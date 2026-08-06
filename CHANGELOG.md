@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.14.0 (2026-08-06)
+
+### Documentation
+
+- **roadmap**: Analyse the 2026-08-04 usage report
+  ([#53](https://github.com/FreddieMcHeart/claude-core/pull/53),
+  [`1ece4fc`](https://github.com/FreddieMcHeart/claude-core/commit/1ece4fc0ebf5afe39cfe74421f3944cd74ece346))
+
+### Features
+
+- **hook**: Nudge to open the workstream's vault page before starting work
+  ([#52](https://github.com/FreddieMcHeart/claude-core/pull/52),
+  [`45311c3`](https://github.com/FreddieMcHeart/claude-core/commit/45311c3322828c7b37cd7be17d4c9173267adf0e))
+
+
 ## v0.13.2 (2026-08-04)
 
 ### Bug Fixes
