@@ -560,6 +560,13 @@ def new_state(session_id):
                                      # only question the advisory needs. Relative, not
                                      # absolute, because this list is re-serialised on every
                                      # PreToolUse. Bounded by WIKI_READ_PATHS_CAP.
+        "wiki_paths_read_evicted": False,  # read-before-work: has the cap above ever
+                                     # DROPPED an entry this session. The list is read as
+                                     # proof of a negative ("this page is not in it, so it
+                                     # was never opened"), and once anything has been
+                                     # evicted that inference is unsound. Recorded rather
+                                     # than papered over with a larger cap, which would
+                                     # only move the same defect further into the session.
         "workstream_keys_fired": [], # read-before-work: keys SETTLED this session — looked
                                      # for and nothing further to say. An unopened key is
                                      # deliberately absent, so it re-fires until the page is
@@ -1760,10 +1767,19 @@ def workstream_page_scan(keys, repo=None):
 
     index_paths = sorted(p for p in tracked if p.rsplit("/", 1)[-1] in WIKI_INDEX_NAMES)
     index_rows, unread = [], 0
+    # Split by CAUSE, because the three have three different remedies and the sum has
+    # none. `truncated_indexes` reports "N index file(s) not inspected", which reads as
+    # the cap — so a reader who raises WIKI_INDEX_CAP in response to a spent scan budget
+    # or a malformed fence changes nothing and has no way to find that out. The sum is
+    # kept as the gate (every consumer of it is asking the one question "was the
+    # enumeration whole", for which the total is exactly right); the breakdown rides
+    # alongside it for whoever has to act.
+    cause_unreadable, cause_unterminated = 0, 0
     for path in index_paths[:WIKI_INDEX_CAP]:
         content = git("show", f"HEAD:{path}")
         if content is None:
             unread += 1
+            cause_unreadable += 1
             continue
         # Parsed ONCE per file rather than once per key: the strip, the split and the
         # fence walk depend only on the content, and sitting inside `for key in keys`
@@ -1792,7 +1808,16 @@ def workstream_page_scan(keys, repo=None):
             # file would under-report — the permissive direction — and silence from a
             # check that stopped reading is the failure this exists to avoid."
             unread += 1
-    truncated_indexes = max(0, len(index_paths) - WIKI_INDEX_CAP) + unread
+            cause_unterminated += 1
+    cause_over_cap = max(0, len(index_paths) - WIKI_INDEX_CAP)
+    truncated_indexes = cause_over_cap + unread
+    truncated_index_causes = {
+        k: v for k, v in (
+            ("index_over_cap", cause_over_cap),
+            ("index_unreadable", cause_unreadable),
+            ("index_unterminated_fence", cause_unterminated),
+        ) if v
+    }
 
     # Populated by `_resolve` below, keyed by the RAW (un-normalized) target string, so
     # the per-key loop can ask "was this exact call ambiguous?" without re-deriving the
@@ -1854,7 +1879,12 @@ def workstream_page_scan(keys, repo=None):
                 ambiguous_keys.add(key)
         if found:
             hits[key] = found
-    return {"hits": hits, "truncated_indexes": truncated_indexes, "ambiguous_keys": ambiguous_keys}
+    return {
+        "hits": hits,
+        "truncated_indexes": truncated_indexes,
+        "truncated_index_causes": truncated_index_causes,
+        "ambiguous_keys": ambiguous_keys,
+    }
 
 
 def workstream_page_context(state, prompt):
@@ -1910,8 +1940,21 @@ def workstream_page_context(state, prompt):
         # not a raw shape regex — a raw search matches denylisted prefixes too (AES-256,
         # SHA3-256, RFC-2119, CVE-2021-4034), which reported "already-advised" for
         # prompts that never named a real key at all.
+        # `already-SETTLED`, not `already-advised`. A key is settled once it has been
+        # LOOKED FOR, whatever the answer — and the common answer is `no-page`, which
+        # shows the user nothing. So the old name asserted that an advisory had fired
+        # for a key that, in the majority case, never produced one. Reproduced
+        # 2026-08-06: two prompts naming ZZZ-999 gave `no-page` then `already-advised`,
+        # with no message shown either time. Same family as the severity predicate this
+        # branch already repaired — a name standing in for the property, and diverging
+        # from it in the case that happens most.
+        #
+        # The STATE FIELD keeps its name (`workstream_keys_fired`) deliberately: it is
+        # persisted on disk, and renaming it would silently discard the settled set of
+        # every session whose state file predates this commit, re-firing advisories that
+        # were already answered. A log label is free to change; a storage key is not.
         all_keys, _ = workstream_keys(prompt)
-        return (None, "already-advised" if all_keys else None, {})
+        return (None, "already-settled" if all_keys else None, {})
     if state.get("workstream_scans", 0) >= WORKSTREAM_MAX_SCANS:
         return (None, "scan-budget-spent", {})
 
@@ -1959,16 +2002,70 @@ def workstream_page_context(state, prompt):
             if k not in settled:
                 settled.append(k)
 
+    def _key_caveat():
+        """`truncated_keys` as a details fragment, for EVERY return that has one.
+
+        The per-prompt key bound was computed once at the top and then reported at
+        exactly one of the five return sites — the advisory branch, in prose. The other
+        four built their `details` from scratch and dropped it, though the variable was
+        in scope at each. So a prompt naming five keys whose first three all resolved
+        `no-page` logged a clean verdict with no trace that two keys were never looked at
+        — a silent truncation, which is the one thing every bound in this file is
+        required not to be.
+        """
+        return {"truncated_keys": truncated_keys} if truncated_keys else {}
+
+    def _partial_name(found):
+        """`opened-partial` vs `no-page-partial`, decided by whether a page was FOUND.
+
+        Both partial branches used to return `no-page-partial` unconditionally, without
+        consulting `hits`. `if not unopened:` is true in two distinguishable situations —
+        the scan found nothing, and the scan found a page that this session had already
+        opened — and only the first is what the name says. Reproduced 2026-08-06 by
+        probing the truncated branch: `hits={'PLAT-3113': ['brain/proj/PLAT-3113-...md']}`
+        while the outcome read `no-page-partial`. A page existed, it was open, and the
+        fire log recorded that there was no page.
+
+        The user-visible behaviour was never wrong — no advisory fires on either branch,
+        which is what the surrounding comment defends. The INSTRUMENT was wrong, and the
+        fire log is the one number this repo calls trustworthy. This mirrors the
+        `opened` / `no-page` split the complete path already makes, so it is the
+        vocabulary's own logic rather than a new invention.
+        """
+        return "opened-partial" if found else "no-page-partial"
+
     if scan is None:
-        # "Could not look" settles the key too. Otherwise an install whose wiki_path points
-        # nowhere — the packaged default does — rescans and writes a fire-log line on every
-        # prompt naming anything ticket-shaped, forever, burying the outcomes that matter.
-        _mark(fresh)
-        return (None, "skipped", {})
+        # "Could not look" comes in two kinds and they must not settle alike.
+        #
+        # PERMANENT — the vault is not a usable git repo at all (the packaged default
+        # points nowhere). Settle: otherwise every prompt naming anything ticket-shaped
+        # writes a fire-log line forever, burying the outcomes that matter. That was the
+        # whole of the original justification, and for this half it still holds.
+        #
+        # TRANSIENT — git was slow, the scan budget ran out, a subprocess died. Settling
+        # here made ONE unlucky timeout blind the feature for that key for the rest of the
+        # session, silently, on a key whose page exists and is unopened. Reproduced
+        # 2026-08-06 with a zeroed budget: outcome `skipped` and the key marked, where the
+        # control arm with the same key and no failure produced `unopened` WITH an advisory.
+        # That is the exact failure this whole check is built to prevent, caused by its own
+        # guard.
+        #
+        # Not settling used to mean unbounded rescanning, which is why the original code
+        # settled both. It no longer does: `workstream_scans` was moved above to increment
+        # on every call that reaches a scan — including this one, verified by execution —
+        # so a permanently-transient failure costs at most WORKSTREAM_MAX_SCANS scans and
+        # then `scan-budget-spent` takes over. The justification in the old comment had
+        # outlived the condition that produced it, and nobody re-read it when the counter
+        # moved.
+        if not (WIKI_DIR.is_dir() and (WIKI_DIR / ".git").exists()):
+            _mark(fresh)
+            return (None, "skipped", {"reason": "no_vault"})
+        return (None, "skipped-partial", {"reason": "scan_failed", **_key_caveat()})
 
     hits = scan["hits"]
     ambiguous = scan["ambiguous_keys"]
     read = state.get("wiki_paths_read") or []
+    read_partial = bool(state.get("wiki_paths_read_evicted"))
     unopened, truncated_pages = {}, 0
     for key, paths in hits.items():
         # Anchored: bare endswith matched across a path boundary, so a Read of
@@ -1992,14 +2089,18 @@ def workstream_page_context(state, prompt):
             # index-only pages the truncated half never read, so its page list is
             # unproven too — "opened" is exactly as unsupported a claim as "no-page"
             # here. One rule, no per-key carve-out for keys with a hit. Note
-            # `truncated_keys` does NOT feed this: it says other keys in the prompt
+            # `truncated_keys` does NOT feed the GATE: it says other keys in the prompt
             # went unchecked, not that the vault enumeration for THESE keys was
             # partial, and treating it as incomplete-too would mean a prompt naming
             # several keys never settles any of them — the next prompt re-selects the
             # same keys and the scan budget burns down without ever reaching a verdict.
-            # No advisory is produced on this branch either way, so both the no-hits
-            # and the already-read-hit case collapse into the same qualified outcome.
-            return (None, "no-page-partial", {"truncated_indexes": scan["truncated_indexes"]})
+            # It is still REPORTED in details, because a bound that bit must be visible.
+            return (
+                None,
+                _partial_name(hits),
+                {"truncated_indexes": scan["truncated_indexes"],
+                 **scan["truncated_index_causes"], **_key_caveat()},
+            )
         if ambiguous:
             # Ambiguity is a KEY property, not a batch one (see the docstring) — settle
             # every fresh key EXCEPT the ones whose own resolution collided. A key that
@@ -2009,10 +2110,14 @@ def workstream_page_context(state, prompt):
             clean = [k for k in fresh if k not in ambiguous]
             if clean:
                 _mark(clean)
-            return (None, "no-page-partial", {"ambiguous_keys": sorted(ambiguous)})
+            return (
+                None,
+                _partial_name(hits),
+                {"ambiguous_keys": sorted(ambiguous), **_key_caveat()},
+            )
         # Settled: nothing more to say about these keys this session.
         _mark(fresh)
-        return (None, "opened" if hits else "no-page", {})
+        return (None, "opened" if hits else "no-page", _key_caveat())
 
     # An UNOPENED key is deliberately NOT settled. `additionalContext` has been measured
     # being dropped mid-session while every stamp advanced perfectly, and marking here
@@ -2036,7 +2141,13 @@ def workstream_page_context(state, prompt):
         # stem settles normally. `k not in unopened` is unchanged: an unopened key is
         # never settled regardless of ambiguity, per the comment above.
         _mark([k for k in fresh if k not in unopened and k not in ambiguous])
-        outcome = "unopened-partial" if ambiguous else "unopened"
+        # `read_partial` qualifies the advisory but does NOT block settling, and the
+        # asymmetry is the point: eviction can only ever produce a FALSE UNOPENED (a
+        # path that was read is missing from the record), never a false opened (a path
+        # present in the record was genuinely read). So the keys being settled here —
+        # the ones NOT in `unopened` — rest on a positive membership test that eviction
+        # cannot corrupt. Only the negative inference needs the caveat.
+        outcome = "unopened-partial" if (ambiguous or read_partial) else "unopened"
 
     listed = "; ".join(
         f"**{key}** → {', '.join(paths)}" for key, paths in sorted(unopened.items())
@@ -2053,6 +2164,12 @@ def workstream_page_context(state, prompt):
         )
     if truncated_pages:
         caveats.append(f"{truncated_pages} further page(s) not listed")
+    if read_partial:
+        caveats.append(
+            f"this session has opened more than {WIKI_READ_PATHS_CAP} vault pages, so the "
+            f"record of what was opened is partial — a page named here may in fact have "
+            f"been read earlier in the session"
+        )
     tail = f" Incomplete coverage: {'; '.join(caveats)}." if caveats else ""
     return (
         f"**Read before work** — this prompt names a workstream the vault already has a page "
@@ -2538,33 +2655,56 @@ def handle_pre_tool(payload):
     # invoked before any wiki Read" — the producer-vs-consumer gap flagged in
     # the 2026-05-12 retrospective. Counts any tool call referencing
     # the configured wiki path (_WIKI_PATH) — Read, Grep, Glob, or Bash (command-string match).
-    _wiki_path_hit = False
-    _wiki_read_target = ""
-    if tool_name == "Read":
-        _wiki_read_target = tool_input.get("file_path") or ""
-        # Via _vault_relative, so the docs/core mount counts as the vault here too. The
-        # first version tested only the canonical prefix, which meant a Read through the
-        # mount was neither counted nor recorded.
-        _wiki_path_hit = _vault_relative(_wiki_read_target) is not None
-    elif tool_name in ("Grep", "Glob"):
-        _wiki_path_hit = (_WIKI_PATH + "/") in (tool_input.get("path") or "")
-    elif tool_name == "Bash":
-        _wiki_path_hit = _WIKI_PATH in (tool_input.get("command") or "")
-    if _wiki_path_hit:
-        state["wiki_read_count"] = state.get("wiki_read_count", 0) + 1
-        # Record the path only for `Read`, deliberately. A Grep or a Bash sweep across the
-        # vault is not "you opened the page for this ticket" — it is the read-to-consult
-        # versus read-in-order-to-edit distinction that neither of the 2026-08-04
-        # measurements could make, and counting a sweep as having consulted a page would
-        # let the advisory be silenced by an operation that read nothing in particular.
-        # Under-crediting is the safe direction here: the cost is one extra nudge.
-        if tool_name == "Read" and _wiki_read_target:
-            _rel = _vault_relative(_wiki_read_target)
-            if _rel:
-                _seen = state.setdefault("wiki_paths_read", [])
-                if _rel not in _seen:
-                    _seen.append(_rel)
-                    del _seen[:-WIKI_READ_PATHS_CAP]
+    # Guarded as one unit. This block runs on EVERY PreToolUse call for every tool in
+    # every project — the highest-frequency path in the file — and it is the one place
+    # the "one try/except per advisory" convention was not applied. The predicate it
+    # replaced did strictly less (a single substring test on a string forced by `or ""`);
+    # this version calls a helper and mutates a list in state. `main()` does catch
+    # everything and exit 0, so the prompt is never broken — but an exception here
+    # silently truncates the rest of `handle_pre_tool`, including the Layer-3 cross-repo
+    # catch-net below, with nothing reaching the fire log to say so.
+    try:
+        _wiki_path_hit = False
+        _wiki_read_target = ""
+        if tool_name == "Read":
+            _wiki_read_target = tool_input.get("file_path") or ""
+            # Via _vault_relative, so the docs/core mount counts as the vault here too. The
+            # first version tested only the canonical prefix, which meant a Read through the
+            # mount was neither counted nor recorded.
+            _wiki_path_hit = _vault_relative(_wiki_read_target) is not None
+        elif tool_name in ("Grep", "Glob"):
+            _wiki_path_hit = (_WIKI_PATH + "/") in (tool_input.get("path") or "")
+        elif tool_name == "Bash":
+            _wiki_path_hit = _WIKI_PATH in (tool_input.get("command") or "")
+        if _wiki_path_hit:
+            state["wiki_read_count"] = state.get("wiki_read_count", 0) + 1
+            # Record the path only for `Read`, deliberately. A Grep or a Bash sweep across the
+            # vault is not "you opened the page for this ticket" — it is the read-to-consult
+            # versus read-in-order-to-edit distinction that neither of the 2026-08-04
+            # measurements could make, and counting a sweep as having consulted a page would
+            # let the advisory be silenced by an operation that read nothing in particular.
+            # Under-crediting is the safe direction here: the cost is one extra nudge.
+            if tool_name == "Read" and _wiki_read_target:
+                _rel = _vault_relative(_wiki_read_target)
+                if _rel:
+                    _seen = state.setdefault("wiki_paths_read", [])
+                    if _rel not in _seen:
+                        _seen.append(_rel)
+                        # The cap EVICTS, and the eviction has to be recorded, because
+                        # this list is read as proof of a negative: "this path is not in
+                        # it" is what makes the advisory claim the page was never opened.
+                        # Once the oldest entries are dropped, that inference is unsound —
+                        # and the failure is not a mislabelled log row but a FALSE
+                        # ADVISORY shown to the user about a page they did open.
+                        # Reproduced 2026-08-06: under the cap the outcome is `opened`
+                        # and silent; over it, `unopened` with the message displayed.
+                        # Raising the cap is not the fix; the same class returns one
+                        # long session later. Recording that the record is partial is.
+                        if len(_seen) > WIKI_READ_PATHS_CAP:
+                            del _seen[:-WIKI_READ_PATHS_CAP]
+                            state["wiki_paths_read_evicted"] = True
+    except Exception:
+        pass  # never let vault bookkeeping truncate the rest of this handler
 
     # ---------- Layer 3: cross-repo inline-drift catch-net (C3) ----------
     _root = None

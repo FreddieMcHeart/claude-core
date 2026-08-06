@@ -314,12 +314,38 @@ def test_silent_when_the_page_was_already_opened(live):
     assert cd.workstream_page_context(st, "continue PLAT-3113") == (None, "opened", {})
 
 
-def test_a_read_of_a_suffix_lookalike_does_not_credit_the_page(live):
+def test_a_read_of_a_suffix_lookalike_does_not_credit_the_page(live, vault):
     """`'snapshot.md'.endswith('hot.md')` is True. Unanchored suffix matching let a Read of
     an unrelated file silence the advisory — the over-crediting direction, which this check
-    must not have."""
-    st = _state(wiki_paths_read=["brain/proj/not-PLAT-3113-rtbf-migration.md"])
-    assert cd.workstream_page_context(st, "PLAT-3113")[1] == "unopened"
+    must not have.
+
+    FIXTURE REBUILT 2026-08-06, because the original could not fail. It read
+    `brain/proj/not-PLAT-3113-rtbf-migration.md` against the page
+    `brain/proj/PLAT-3113-rtbf-migration.md` — inserting `not-` BETWEEN the directory and
+    the filename, which breaks the bare-suffix collision instead of exhibiting it:
+    `r.endswith(p)` is False there, so the naive pre-fix form produced the identical
+    result and the test passed against the very bug it was named for. Confirmed by
+    mutation: reverting the anchor to `any(r.endswith(p) for r in read)` left all 63
+    tests in this file green — the whole suite, not just this one, was blind to it.
+
+    The rebuilt fixture uses a page at the VAULT ROOT, which is the docstring's own
+    example and the only shape where the collision is real: with `p = "PLAT-7-hot.md"`
+    and `r = "snapshot-PLAT-7-hot.md"`, `r.endswith(p)` is True while
+    `r.endswith("/" + p)` is False. The naive form credits the page, the anchored form
+    does not, and the two arms now differ.
+    """
+    (vault / "PLAT-7-hot.md").write_text("# hot\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "a page at the vault root")
+
+    # CONTROL: reading the page itself credits it, so the advisory stays silent.
+    st_read = _state(wiki_paths_read=["PLAT-7-hot.md"])
+    assert cd.workstream_page_context(st_read, "PLAT-7")[1] == "opened"
+
+    # TREATMENT: a DIFFERENT file whose name merely ends with the page's name must not.
+    st_look = _state(wiki_paths_read=["snapshot-PLAT-7-hot.md"])
+    assert cd.workstream_page_context(st_look, "PLAT-7")[1] == "unopened", \
+        "an unanchored endswith credits a file that is not the page"
 
 
 def test_silent_but_LOGGED_when_no_page_exists(live):
@@ -342,7 +368,7 @@ def test_an_incomplete_scan_is_not_reported_as_no_page(live, monkeypatch):
     assert outcome == "no-page-partial"
     assert msg is None
     assert "INE-857" not in st["workstream_keys_fired"], "an incomplete scan must not settle"
-    assert details == {"truncated_indexes": 1}
+    assert details == {"truncated_indexes": 1, "index_over_cap": 1}
 
 
 def test_a_hit_elsewhere_in_the_batch_does_not_mask_a_truncated_key(live, monkeypatch):
@@ -395,6 +421,16 @@ def test_a_truncated_scan_does_not_settle_an_already_opened_hit_either(live, mon
     settled. TRUNCATED (cap 0): same key, same already-read page, but the index half of
     the scan never ran -> must NOT settle, and 'opened' is not a claim the code can
     support with an unproven page list.
+
+    THE OUTCOME NAME, corrected 2026-08-06. This test used to assert `no-page-partial`
+    here, and that assertion was wrong in the direction the whole branch is about: a
+    page for PLAT-3113 exists in this fixture and was read this session, so a name
+    meaning "the scan found nothing, and it was partial" states something false. The
+    settling behaviour it was written to guard is unchanged and still asserted below;
+    only the label moves, to `opened-partial` — which is what the complete path already
+    calls this case (`opened`), qualified the same way truncation qualifies everything
+    else. Found by probing the return site during review: `hits` was non-empty at the
+    moment the code returned "no page".
     """
     read = ["brain/proj/PLAT-3113-rtbf-migration.md"]
 
@@ -405,10 +441,29 @@ def test_a_truncated_scan_does_not_settle_an_already_opened_hit_either(live, mon
     monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
     st_trunc = _state(wiki_paths_read=list(read))
     msg, outcome, details = cd.workstream_page_context(st_trunc, "PLAT-3113")
-    assert outcome == "no-page-partial"
+    assert outcome == "opened-partial", \
+        "a page exists and was opened; only the enumeration was partial"
     assert msg is None
     assert "PLAT-3113" not in st_trunc["workstream_keys_fired"]
-    assert details == {"truncated_indexes": 1}
+    assert details == {"truncated_indexes": 1, "index_over_cap": 1}
+
+
+def test_a_truncated_scan_with_no_hit_at_all_is_still_no_page_partial(live, monkeypatch):
+    """The other arm of the split above, and the reason it is a split rather than a
+    rename: `opened-partial` must NOT swallow the genuinely-empty case.
+
+    ZZZ-999 has no page anywhere in the fixture vault, so `hits` is empty. Same cap-0
+    truncation as the test above, same branch, same `details` — and the outcome must
+    still be `no-page-partial`. Without this arm, changing the production line to return
+    `opened-partial` unconditionally would pass the test above and lose the distinction
+    entirely, which is exactly the collapse being repaired.
+    """
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    st = _state()
+    msg, outcome, details = cd.workstream_page_context(st, "ZZZ-999")
+    assert outcome == "no-page-partial", "no page exists for this key; the name must say so"
+    assert msg is None
+    assert details == {"truncated_indexes": 1, "index_over_cap": 1}
 
 
 def test_a_truncated_scan_does_not_settle_an_already_opened_key_on_the_message_path(
@@ -531,7 +586,7 @@ def test_ambiguity_in_one_key_does_not_hold_back_an_unrelated_key(live, vault, m
     assert "INE-857" not in st_trunc["workstream_keys_fired"]
     assert "ZZZ-999" not in st_trunc["workstream_keys_fired"], \
         "a truncated index enumeration IS batch-wide and must still hold everyone back"
-    assert details2 == {"truncated_indexes": 2}, \
+    assert details2 == {"truncated_indexes": 2, "index_over_cap": 2}, \
         "_collide added a second _index.md to the vault, so both are uncounted at cap 0"
 
 
@@ -598,7 +653,7 @@ def test_no_page_partial_names_its_cause_in_log_details(live, vault, monkeypatch
     monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
     _, outcome2, details2 = cd.workstream_page_context(_state(), "INE-857")
     assert outcome2 == "no-page-partial"
-    assert details2 == {"truncated_indexes": 2}, \
+    assert details2 == {"truncated_indexes": 2, "index_over_cap": 2}, \
         "_collide added a second _index.md to the vault, so both are uncounted at cap 0"
 
 
@@ -628,7 +683,7 @@ def test_no_key_in_prompt_is_a_third_state_not_clean(live):
 def test_fires_once_per_key_for_a_settled_key(live):
     st = _state()
     assert cd.workstream_page_context(st, "ZZZ-999?")[1] == "no-page"
-    assert cd.workstream_page_context(st, "ZZZ-999 again")[1] == "already-advised"
+    assert cd.workstream_page_context(st, "ZZZ-999 again")[1] == "already-settled"
 
 
 def test_an_unopened_key_is_NOT_settled_and_re_fires(live):
@@ -648,7 +703,7 @@ def test_could_not_look_settles_the_key_so_it_does_not_rescan_forever(live, monk
     monkeypatch.setattr(cd, "WIKI_DIR", Path("/nonexistent-vault"))
     st = _state()
     assert cd.workstream_page_context(st, "PLAT-3113")[1] == "skipped"
-    assert cd.workstream_page_context(st, "PLAT-3113")[1] == "already-advised"
+    assert cd.workstream_page_context(st, "PLAT-3113")[1] == "already-settled"
 
 
 def test_scan_count_has_a_session_backstop(live):
@@ -712,7 +767,7 @@ def test_scan_budget_does_not_advance_when_every_key_is_already_settled(live):
     """
     st = _state(workstream_keys_fired=["PLAT-3113"])
     _, outcome, _ = cd.workstream_page_context(st, "PLAT-3113 again")
-    assert outcome == "already-advised"
+    assert outcome == "already-settled"
     assert st["workstream_scans"] == 0
 
 
@@ -727,25 +782,25 @@ def test_settled_keys_do_not_consume_the_per_prompt_bound(live):
     assert truncated == 0
 
 
-def test_denylisted_token_alone_is_no_key_not_already_advised(live):
-    """The 'no keys survived exclusion' branch used to decide already-advised-vs-nothing
+def test_denylisted_token_alone_is_no_key_not_already_settled(live):
+    """The 'no keys survived exclusion' branch used to decide already-settled-vs-nothing
     with a raw WORKSTREAM_KEY_RE.search, which applies the shape test only and skips the
     denylist workstream_keys applies. AES-256 is denylisted (SHA3-256, UTF-8, RFC-2119,
     CVE-2021-4034 are the same class): a fresh session naming only it named no real
-    workstream key, so this must be silent and unlogged, not a false already-advised row
+    workstream key, so this must be silent and unlogged, not a false already-settled row
     written to the fire log for a key nobody was ever advised on."""
     assert cd.workstream_page_context(_state(), "explain AES-256 padding") == (None, None, {})
 
 
-def test_denylisted_token_plus_settled_key_still_reports_already_advised(live):
+def test_denylisted_token_plus_settled_key_still_reports_already_settled(live):
     """The discriminating case: a denylisted token sits next to a real, already-settled
-    key in the same prompt. A fix that simply deleted the already-advised branch (instead
+    key in the same prompt. A fix that simply deleted the already-settled branch (instead
     of re-deriving it from the denylist-aware extraction) would pass the test above alone
-    while silently losing this one — the settled key must still produce already-advised,
+    while silently losing this one — the settled key must still produce already-settled,
     not None."""
     st = _state(workstream_keys_fired=["PLAT-3113"])
     assert cd.workstream_page_context(st, "AES-256 and PLAT-3113 again") == (
-        None, "already-advised", {})
+        None, "already-settled", {})
 
 
 def test_truncation_is_reported_in_the_message(live, monkeypatch):
@@ -897,3 +952,121 @@ def test_severity_marks_an_advisory_that_fired_whatever_the_outcome_is_called(
     fired.clear()
     cd.handle_user_prompt_submit({"session_id": "s3", "prompt": "work on ZZZ-999"})
     assert _severity_for(fired) == ("no-page-partial", "info")
+
+
+def test_a_transient_scan_failure_does_not_settle_the_key(live, monkeypatch):
+    """A one-off timeout must not blind the feature for the rest of the session.
+
+    `scan is None` used to settle unconditionally, justified by a comment about an
+    install whose wiki_path points nowhere rescanning forever. That justification had
+    outlived its condition: a later fix moved `workstream_scans` to increment on every
+    call that reaches a scan, so rescanning is now bounded at WORKSTREAM_MAX_SCANS
+    whether or not the key settles. Meanwhile the settle was doing real harm — a single
+    slow `git` permanently suppressed the advisory for a key whose page exists and is
+    unopened, which is the exact failure this check is built to prevent.
+
+    CONTROL is the third arm and it carries the finding: with no failure at all the same
+    key produces `unopened` WITH a message. Without it, `skipped` on both arms would
+    read as correct behaviour.
+    """
+    st = _state()
+    monkeypatch.setattr(cd, "WORKSTREAM_SCAN_BUDGET", 0.0)
+    msg1, outcome1, details1 = cd.workstream_page_context(st, "PLAT-3113")
+    assert outcome1 == "skipped-partial", "a transient failure is partial, not settled"
+    assert details1 == {"reason": "scan_failed"}
+    assert "PLAT-3113" not in st["workstream_keys_fired"], \
+        "one slow git must not blind this key for the session"
+
+    # RECOVERY: with the budget restored the key is still reachable and still advises.
+    monkeypatch.setattr(cd, "WORKSTREAM_SCAN_BUDGET", 2.0)
+    msg2, outcome2, _ = cd.workstream_page_context(st, "PLAT-3113")
+    assert outcome2 == "unopened" and msg2 is not None
+
+    # CONTROL: the same key, never failing, behaves identically — so the assertion above
+    # is about recovery, not about the key being unusual.
+    ctl = _state()
+    msg3, outcome3, _ = cd.workstream_page_context(ctl, "PLAT-3113")
+    assert outcome3 == "unopened" and msg3 is not None
+
+
+def test_a_permanent_scan_failure_still_settles_the_key(live, monkeypatch, tmp_path):
+    """The other arm of the split, and the reason it is a split.
+
+    When the vault is not a usable git repo at all — the packaged default points nowhere
+    — nothing will change within the session, so settling is right and the original
+    comment's concern is real: without it every prompt naming anything ticket-shaped
+    writes a fire-log row forever. Removing the settle wholesale would have traded one
+    defect for that one.
+    """
+    monkeypatch.setattr(cd, "WIKI_DIR", tmp_path / "no-such-vault")
+    st = _state()
+    msg, outcome, details = cd.workstream_page_context(st, "PLAT-3113")
+    assert outcome == "skipped", "an unusable vault is permanent; settle it"
+    assert details == {"reason": "no_vault"}
+    assert "PLAT-3113" in st["workstream_keys_fired"]
+
+
+def test_an_evicted_read_record_downgrades_the_claim_it_can_no_longer_prove(live):
+    """`wiki_paths_read` is read as proof of a NEGATIVE — "this path is not in the list,
+    so the page was never opened". Once the cap has evicted anything, that inference is
+    unsound, and the failure is not a mislabelled log row: it is a false advisory shown
+    to the user about a page they did open.
+
+    CONTROL: the page is recorded and under the cap -> `opened`, silent.
+    TREATMENT: the same page was read, but eviction dropped it -> the code cannot prove
+    the negative, so the outcome is qualified and the message says the record is partial.
+    """
+    real = "brain/proj/PLAT-3113-rtbf-migration.md"
+
+    ctl = _state(wiki_paths_read=[real])
+    assert cd.workstream_page_context(ctl, "PLAT-3113")[1] == "opened"
+
+    st = _state(wiki_paths_read=[], wiki_paths_read_evicted=True)
+    msg, outcome, _ = cd.workstream_page_context(st, "PLAT-3113")
+    assert outcome == "unopened-partial", \
+        "with an evicted record the code cannot claim the page was never opened"
+    assert "record of what was opened is partial" in msg
+
+
+def test_the_eviction_flag_tracks_the_event_not_the_cap(live, monkeypatch):
+    """The flag must track the EVICTION, not the existence of a cap.
+
+    Setting it on every append past the first would make every long-ish session
+    permanently partial — the over-reporting mirror of the bug it fixes, and invisible,
+    because `unopened-partial` is a plausible outcome that nobody would question.
+
+    Drives the real `handle_pre_tool`, not a hand-built list: the predecessor of this
+    whole family of tests set a field the function under test never read.
+    CONTROL is at exactly the cap, TREATMENT is one past it.
+    """
+    monkeypatch.setattr(cd, "WIKI_READ_PATHS_CAP", 3)
+
+    st = None
+    for n in range(3):
+        st = _pre_tool("Read", {"file_path": str(live / f"brain/p{n}.md")})
+    assert len(st["wiki_paths_read"]) == 3
+    assert not st.get("wiki_paths_read_evicted"), \
+        "at exactly the cap nothing has been dropped yet"
+
+    st = _pre_tool("Read", {"file_path": str(live / "brain/p3.md")})
+    assert st["wiki_paths_read"] == ["brain/p1.md", "brain/p2.md", "brain/p3.md"]
+    assert st.get("wiki_paths_read_evicted") is True, \
+        "one entry was dropped, so the record is no longer proof of a negative"
+
+
+def test_the_per_prompt_key_bound_is_reported_on_a_silent_outcome_too(live):
+    """`truncated_keys` was computed for every call and reported at exactly one of the
+    five return sites — the advisory branch, in prose. A prompt naming five keys whose
+    first three all resolve `no-page` logged a clean verdict with no trace that two keys
+    were never looked at.
+
+    CONTROL: three keys, nothing truncated -> details empty, as before.
+    """
+    ctl = _state()
+    assert cd.workstream_page_context(ctl, "AAA-11 BBB-22 CCC-33")[2] == {}
+
+    st = _state()
+    msg, outcome, details = cd.workstream_page_context(st, "AAA-11 BBB-22 CCC-33 DDD-44 EEE-55")
+    assert msg is None and outcome == "no-page"
+    assert details == {"truncated_keys": 2}, \
+        "a bound that truncated must be visible to a fire-log reader"
