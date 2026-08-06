@@ -363,12 +363,12 @@ aimed at.
 They got out only because their next step happened to be a write (planting a fixture), so
 the streak reset for free. That is luck, not a remedy.
 
-### The statusline HUD and the guard now measure different numbers
+### The statusline HUD and the guard now measure different numbers — RESOLVED 2026-08-03
 
 Found 2026-07-30 while checking whether a scout's consumer list was complete. It is my own
 review miss, from the PR that introduced per-agent scoping.
 
-`~/.claude/statusline-hud-wrapper.sh:46-49` reads the working state file directly:
+`~/.claude/statusline-hud-wrapper.sh:46-49` used to read the working state file directly:
 
 ```sh
 disc_file="/tmp/cc-discipline-${session_id}.json"
@@ -376,12 +376,12 @@ reads=$(jq -r '.aggregate_reads // 0' "$disc_file" ...)
 total=$(jq -r '.tool_calls_total // 0' "$disc_file" ...)
 ```
 
-…and colours `reads` yellow/red against a threshold of **15** — the aggregate warn
+…and coloured `reads` yellow/red against a threshold of **15** — the aggregate warn
 threshold. But since per-agent scoping landed, the warn and block tiers fire on
-`_scoped["agent_reads"]`, while the HUD still displays the **flat, session-wide**
-`aggregate_reads`. Those are now different counters. So the number the human watches and
-the number that acts on them can disagree, in either direction: the HUD can sit green while
-a scope is one call from a block, or sit red while nothing is close to firing.
+`_scoped["agent_reads"]`, while the HUD still displayed the **flat, session-wide**
+`aggregate_reads`. Those were different counters. So the number the human watches and the
+number that acts on them could disagree, in either direction: the HUD could sit green while
+a scope was one call from a block, or sit red while nothing was close to firing.
 
 **This is the same defect I required to be fixed one layer over and did not think to look
 for here.** The review of the scoping PR insisted the fire log record the counter that
@@ -389,14 +389,46 @@ actually fired rather than the flat total — and then never asked what ELSE dis
 total. Fixing an instrument's log while leaving its dashboard on the old field is a partial
 migration of exactly the kind this page keeps cataloguing.
 
-Work: decide what the HUD should show, rather than mechanically repointing it. Candidates —
-the current scope's `agent_reads` (matches what will block *you*), the max across scopes
-(matches "is anything about to fire"), or both numbers. The flat field is still maintained,
-so nothing is broken today; it is simply no longer the number the guard uses.
+**Decision:** the statusline shows the **main scope's** read count, with the scope named in
+the label — `reads(main) 7/15`, never a bare number and never max-across-scopes.
 
-Note for whoever picks this up: the statusline is in `claude-harness`, a different repo from
-the hook, with no CI and no test suite. A change there is verified by looking at a running
-statusline, not by a green build.
+Rejected: max-across-scopes. Established from the code rather than recalled —
+`blocks_enabled(payload)` exempts Agent-tool sub-agent calls via `is_subagent_call(payload)`,
+so a sub-agent's counter **cannot hard-block the human**. A HUD going red because a Haiku
+scout read twenty files would show a number that cannot act on its reader — worse than the
+divergence being fixed, not better.
+
+Rejected: the same number with no label. The defect being fixed is that the scoping was
+INVISIBLE for a day; a bare number reproduces exactly the condition that let it hide.
+
+Also worth recording, since it narrows the design independently of the exemption above: the
+statusline renders BETWEEN tool calls. Scope is a property of a call. At render time the
+session is idle and the actor who will make the next call is the main agent — so `main` is
+the statusline's natural subject regardless.
+
+**The contract:** the hook publishes the display values as stable top-level fields —
+`main_agent_reads` (the number to show) and `aggregate_threshold` (the limit to colour
+against, previously hardcoded 15 in the statusline itself). Both are DERIVED in `save_state`
+from `agent_counters["main"]["agent_reads"]` at write time, never incremented alongside the
+scoped counter — a second independently-maintained counter for the same quantity would
+drift, which is the exact bug the per-agent segmentation exists to prevent. The statusline
+reads the published fields rather than reaching into `agent_counters` directly, which would
+couple a no-CI shell script in a different repo to claude-core's internal state layout — the
+same brittle-read shape that broke both cost-ledger consumers days earlier.
+
+**Status: both sides implemented and merged**, same afternoon:
+
+- claude-core — `hooks/cost-discipline.py`'s `save_state`, via #49 (354fda7).
+- claude-harness — `statusline-hud-wrapper.sh`, via df1c54c then 68612e6. The second commit
+  fixed a real defect the first one shipped: the fallback-to-`aggregate_reads` path printed
+  the `main` label unconditionally, so a HUD running against an un-updated hook rendered the
+  flat, sub-agent-polluted count under a label asserting the main scope — **the original
+  defect restored, wearing the fixed label**. `has("main_agent_reads")` now branches the
+  label (`main` vs `all`) together with the number on the same conditional, so the two
+  cannot disagree the way a static string next to a conditional value could.
+
+No further PR needed for this entry — the code was already correct on both sides; this
+closes the gap between the ROADMAP page and what is actually running.
 
 ### An instrument that records it RAN does not record that its result ARRIVED
 
