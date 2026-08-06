@@ -536,6 +536,57 @@ def test_scan_count_has_a_session_backstop(live):
     assert cd.workstream_page_context(st, "PLAT-3113")[1] == "scan-budget-spent"
 
 
+def test_scan_budget_advances_regardless_of_whether_the_scan_settles(live, vault, monkeypatch):
+    """`workstream_scans` is a cost budget on git subprocess work (a `git ls-tree` plus a
+    `git show` per index file), not a counter of settled keys. It used to live inside
+    `_mark`, which the `no-page-partial` / `unopened-partial` branches never call —
+    reproduced before this fix: those branches ran a full scan and left the counter at
+    0, so a vault permanently stuck in one of them (a permanently colliding stem, or a
+    permanently over-cap index file count) re-ran the same subprocess work on every
+    matching prompt for the rest of the session, and WORKSTREAM_MAX_SCANS never engaged.
+
+    Arm 1 — ambiguous partial: no settling, budget still advances by one.
+    Arm 2 — CONTROL, a complete scan that DOES settle: same one-count advance, proving
+    the fix relocated the increment rather than duplicating it (both arms must move, or
+    an implementation that still only increments on settling would pass Arm 2 alone).
+    Arm 3 — truncated-index partial: the OTHER cause of a partial outcome, same fix.
+    """
+    _collide(vault)
+
+    st1 = _state()
+    _, outcome1 = cd.workstream_page_context(st1, "COLL-11")
+    assert outcome1 == "no-page-partial"
+    assert "COLL-11" not in st1["workstream_keys_fired"]
+    assert st1["workstream_scans"] == 1
+
+    st2 = _state()
+    _, outcome2 = cd.workstream_page_context(st2, "ZZZ-999")
+    assert outcome2 == "no-page"
+    assert "ZZZ-999" in st2["workstream_keys_fired"]
+    assert st2["workstream_scans"] == 1
+
+    monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
+    st3 = _state()
+    _, outcome3 = cd.workstream_page_context(st3, "INE-857")
+    assert outcome3 == "no-page-partial"
+    assert "INE-857" not in st3["workstream_keys_fired"]
+    assert st3["workstream_scans"] == 1
+
+
+def test_scan_budget_does_not_advance_when_every_key_is_already_settled(live):
+    """This is the arm that catches 'increment everywhere': a prompt whose only key is
+    already settled short-circuits at the `if not keys:` branch, before
+    workstream_page_scan is ever called — no git work happens, so the budget must not
+    move. An implementation that bumps the counter unconditionally at the top of the
+    handler (rather than only when a scan actually runs) would pass the arms above and
+    still fail this one.
+    """
+    st = _state(workstream_keys_fired=["PLAT-3113"])
+    _, outcome = cd.workstream_page_context(st, "PLAT-3113 again")
+    assert outcome == "already-advised"
+    assert st["workstream_scans"] == 0
+
+
 def test_settled_keys_do_not_consume_the_per_prompt_bound(live):
     """Reproduced before the fix: a prompt naming four keys settles the first three,
     and the fourth — which HAS a committed page — is unreachable for the rest of the

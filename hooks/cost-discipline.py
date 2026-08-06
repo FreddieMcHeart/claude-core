@@ -1894,10 +1894,31 @@ def workstream_page_context(state, prompt):
 
     scan = workstream_page_scan(fresh)
 
-    # Persist against the FRESHEST state, not the copy loaded before the scan. The scan
-    # takes subprocess time, and sub-agents share this session_id and do their own unlocked
-    # load-modify-save in handle_pre_tool — writing the pre-scan snapshot back would revert
-    # every counter they advanced during the window. Re-load, touch only these fields, save.
+    # `workstream_scans` is a COST budget: it bounds how much git subprocess work one
+    # session can provoke, not how many keys got settled. Those used to coincide — every
+    # branch below that called `_mark` also happened to be the only branches that ran a
+    # scan — until the ambiguity fix added two outcomes (`no-page-partial`,
+    # `unopened-partial`) that run a full scan (a `git ls-tree` plus a `git show` per
+    # index file) but settle nothing. Keying the counter on settling instead of on the
+    # scan meant those two outcomes did real subprocess work on EVERY matching prompt,
+    # for the rest of the session, with WORKSTREAM_MAX_SCANS never actually engaging —
+    # unbounded git work on the UserPromptSubmit hot path, the same shape of bug as a
+    # fire-log severity keyed on an outcome name instead of on whether an advisory
+    # fired. Increment exactly once per call that reaches a scan, before any branch
+    # decides what to do with the result — re-loading fresh state first for the same
+    # reason `_mark` below does: sub-agents share this session_id and do their own
+    # unlocked load-modify-save, so writing back a pre-scan snapshot would revert
+    # counters they advanced during the scan's subprocess time.
+    try:
+        live = load_state(state.get("session_id"))
+        live["workstream_scans"] = live.get("workstream_scans", 0) + 1
+        save_state(live)
+    except Exception:
+        pass  # the advisory/outcome below is still right; only the budget count is lost
+    state["workstream_scans"] = state.get("workstream_scans", 0) + 1
+
+    # Settling is a SEPARATE event from scanning (see above) — `_mark` now only ever
+    # touches `workstream_keys_fired`.
     def _mark(settled_keys):
         try:
             live = load_state(state.get("session_id"))
@@ -1906,14 +1927,12 @@ def workstream_page_context(state, prompt):
                 if k not in lst:
                     lst.append(k)
             del lst[:-WORKSTREAM_MAX_SCANS * 2]
-            live["workstream_scans"] = live.get("workstream_scans", 0) + 1
             save_state(live)
         except Exception:
             pass  # the advisory is still right for this prompt; only once-per-key is lost
         for k in settled_keys:
             if k not in settled:
                 settled.append(k)
-        state["workstream_scans"] = state.get("workstream_scans", 0) + 1
 
     if scan is None:
         # "Could not look" settles the key too. Otherwise an install whose wiki_path points
