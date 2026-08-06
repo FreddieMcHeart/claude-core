@@ -1748,8 +1748,18 @@ def workstream_page_scan(keys, repo=None):
     if listing is None:
         return None
     tracked = {p for p in listing.split("\0") if p.endswith(".md")}
-    if not tracked:
-        return None
+    # NO early return on an empty `tracked`. A vault that is a git repo, has commits, and
+    # whose `ls-tree` succeeded has been SEARCHED — it simply holds no markdown. Returning
+    # the could-not-look sentinel for it merged the two states this function exists to keep
+    # apart, and the fall-through below produces exactly the right answer with no special
+    # case: no index files, no rows, `hits` empty, `truncated_indexes` zero.
+    #
+    # Harmless while `scan is None` settled unconditionally. The transient/permanent split
+    # made it cost something: an install whose vault legitimately holds no markdown stopped
+    # settling and now re-runs `git ls-tree` on every ticket-shaped prompt until the scan
+    # budget is spent — 24 subprocesses a session where there had been one. Found by a
+    # reviewer driving three vaults that differed only in their contents, which is the
+    # comparison that makes it visible; either vault alone looks correct.
     # Bare-stem targets (`[[hot]]`) resolve through stems, exactly as wiki_index_scan does.
     # The first version emitted `hot.md` as a repo-root path, which resolves to nothing for
     # any page not literally at the vault root.

@@ -1070,3 +1070,132 @@ def test_the_per_prompt_key_bound_is_reported_on_a_silent_outcome_too(live):
     assert msg is None and outcome == "no-page"
     assert details == {"truncated_keys": 2}, \
         "a bound that truncated must be visible to a fire-log reader"
+
+
+# ============ coverage gaps found by a reviewer's mutation run, 2026-08-06 ============
+# Seven predicates behaved CORRECTLY on HEAD and were pinned by nothing: 24 mutations
+# applied, 17 killed, 7 survived. Measured against the real vault at the same time, the
+# exposure of the four index-shape ones is currently ZERO — no `_index.md` in
+# claude-core-wiki uses a tilde fence, an HTML-commented row, a second-cell wikilink or a
+# code-wrapped wikilink. That is the argument for testing them rather than against it: the
+# guards exist for a shape the vault does not have YET, so nothing but a test will notice
+# when one of them is deleted.
+
+def test_a_key_followed_by_a_letter_is_not_a_key():
+    """The trailing lookahead. `PLAT-3113x` is a different token, not a truncated key."""
+    assert cd.workstream_keys("see PLAT-3113x here")[0] == []
+
+
+def test_a_key_preceded_by_a_letter_is_not_a_key():
+    r"""The leading `\b`. `xPLAT-3113` is not a mention of PLAT-3113."""
+    assert cd.workstream_keys("see xPLAT-3113 here")[0] == []
+
+
+def test_a_tilde_fence_hides_index_rows_exactly_as_a_backtick_fence_does(live, vault):
+    """`~~~` is a legal markdown fence and the walk handles both. Only the backtick half
+    was pinned, so deleting the tilde half left the suite green."""
+    (vault / "brain" / "proj" / "tilde-target.md").write_text("# t\n")
+    (vault / "brain" / "tilde_index" ).mkdir(exist_ok=True)
+    (vault / "brain" / "tilde_index" / "_index.md").write_text(
+        "~~~\n| [[brain/proj/tilde-target]] | TILDE-11 |\n~~~\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "tilde fence")
+    assert cd.workstream_page_scan(["TILDE-11"], repo=vault)["hits"] == {}
+
+
+def test_an_html_commented_row_is_not_a_hit(live, vault):
+    """The comment strip. A commented-out row is not a page anyone can open."""
+    (vault / "brain" / "proj" / "commented-target.md").write_text("# c\n")
+    (vault / "brain" / "cmt_index").mkdir(exist_ok=True)
+    (vault / "brain" / "cmt_index" / "_index.md").write_text(
+        "<!--\n| [[brain/proj/commented-target]] | CMT-11 |\n-->\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "commented row")
+    assert cd.workstream_page_scan(["CMT-11"], repo=vault)["hits"] == {}
+
+
+def test_a_wikilink_outside_the_first_cell_is_not_the_rows_subject(live, vault):
+    """The existing first-cell test does not discriminate: its first-cell link is also the
+    FIRST link on the line, so reading the whole row would give the same answer. This row
+    has NO link in cell one and a link in cell two, which separates the two readings."""
+    (vault / "brain" / "proj" / "second-cell-target.md").write_text("# s\n")
+    (vault / "brain" / "sc_index").mkdir(exist_ok=True)
+    (vault / "brain" / "sc_index" / "_index.md").write_text(
+        "| SECOND-11 | see [[brain/proj/second-cell-target]] |\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "second cell")
+    assert cd.workstream_page_scan(["SECOND-11"], repo=vault)["hits"] == {}
+
+
+def test_a_wikilink_inside_inline_code_is_not_a_link(live, vault):
+    """Inline code is how documentation SHOWS a link without making one."""
+    (vault / "brain" / "proj" / "code-target.md").write_text("# c\n")
+    (vault / "brain" / "code_index").mkdir(exist_ok=True)
+    (vault / "brain" / "code_index" / "_index.md").write_text(
+        "| `[[brain/proj/code-target]]` | CODE-11 |\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "code-wrapped")
+    assert cd.workstream_page_scan(["CODE-11"], repo=vault)["hits"] == {}
+
+
+def test_the_page_sample_bound_is_reported_when_it_truncates(live, vault):
+    """WORKSTREAM_SAMPLE caps how many pages one key names. The count of what was dropped
+    is computed and reaches the advisory text — pinned by nothing, so setting it to a
+    constant zero left the suite green while the caveat silently disappeared."""
+    for n in range(3):
+        (vault / "brain" / "proj" / f"SAMP-11-page{n}.md").write_text("# p\n")
+    _git(vault, "add", "-A")
+    _git(vault, "commit", "-qm", "three pages one key")
+    msg, outcome, _ = cd.workstream_page_context(_state(), "SAMP-11")
+    assert outcome == "unopened"
+    assert "further page(s) not listed" in msg, "a bound that truncated must be reported"
+
+
+def test_a_vault_with_no_markdown_is_searched_not_unreadable(live, vault, monkeypatch):
+    """THREE vaults differing only in contents, because either one alone looks correct.
+
+    A repo that has commits and whose `ls-tree` succeeds HAS been searched; that it holds
+    no markdown is a result, not a failure to look. Returning the could-not-look sentinel
+    merged the two states this function exists to separate — harmless while `scan is None`
+    settled unconditionally, and costly once the transient/permanent split stopped it
+    settling: the key then rescanned on every ticket-shaped prompt, 24 `git ls-tree` calls
+    a session where there had been one.
+    """
+    import subprocess as _sp
+    import tempfile as _tf
+    def _vault(files):
+        d = Path(_tf.mkdtemp()) / "wiki"
+        d.mkdir(parents=True)
+        _sp.run(["git", "init", "-q", str(d)], check=True, capture_output=True)
+        _git(d, "config", "user.email", "t@t")
+        _git(d, "config", "user.name", "t")
+        for name, body in files.items():
+            p = d / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body)
+        _git(d, "add", "-A")
+        _git(d, "commit", "-qm", "x")
+        return d
+
+    empty = _vault({"README.txt": "not markdown"})
+    unrelated = _vault({"notes.md": "nothing relevant"})
+
+    # SEARCHED, holds no markdown at all -> a result, and the key settles.
+    monkeypatch.setattr(cd, "WIKI_DIR", empty)
+    assert cd.workstream_page_scan(["PLAT-3113"], repo=empty)["hits"] == {}
+    st_empty = _state()
+    assert cd.workstream_page_context(st_empty, "PLAT-3113")[1] == "no-page"
+    assert "PLAT-3113" in st_empty["workstream_keys_fired"], \
+        "a searched vault settles the key; only an unreadable one may leave it open"
+
+    # SEARCHED, holds markdown but no page for this key -> must agree with the above.
+    monkeypatch.setattr(cd, "WIKI_DIR", unrelated)
+    st_unrelated = _state()
+    assert cd.workstream_page_context(st_unrelated, "PLAT-3113")[1] == "no-page"
+
+    # COULD NOT LOOK — not a git repo at all. Still distinct from both.
+    not_a_repo = Path(_tf.mkdtemp()) / "plain"
+    not_a_repo.mkdir(parents=True)
+    monkeypatch.setattr(cd, "WIKI_DIR", not_a_repo)
+    assert cd.workstream_page_scan(["PLAT-3113"], repo=not_a_repo) is None
+    assert cd.workstream_page_context(_state(), "PLAT-3113")[1] == "skipped"
