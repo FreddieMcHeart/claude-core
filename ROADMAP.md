@@ -668,6 +668,102 @@ question it is answering, or does it distill uniformly? If uniformly, the agent 
 ready-made answer for it. Full context:
 `docs/core/brain/claude-core/measuring-interventions-controlled-ab-2026-07-20`.
 
+### The 2026-08-04 usage report — six of its recommendations already exist, and one is unfixable in CLAUDE.md
+
+Source: `~/.claude/usage-data/report-2026-08-04-171352.html`, covering 2026-07-10 → 2026-08-04.
+
+**Provenance first, because the report's own headline finding about this operator is
+publishing counts that review has to correct.** Every figure below is the REPORT'S claim.
+None was re-derived here. Restating them as measured fact would be the finding, committed
+to the file that indexes the finding. Treat them as a lead.
+
+| Reported | Value |
+|---|---:|
+| Messages / sessions | 676 across 23 |
+| Bash / Edit / Read / Agent / Write / Skill | 1185 / 388 / 192 / 121 / 85 / 41 |
+| Parallel-session overlap | 43 events, 20 sessions, 42% of messages |
+| Primary friction | buggy code 10, wrong approach 7, excessive changes 4, misunderstood 4, tool failure 4, ignored instructions 3 |
+
+Set that against the single-session table already in this file (Bash 1214 / Read 180 /
+Agent 94 / Edit 413). Two different populations — one session's own transcript versus a
+23-session window — so they are not comparable as ratios, and the interesting difference
+is ordinal rather than numeric: **Edit is the second-most-called tool fleet-wide and was
+3% of context chars in the single-session measurement.** Call frequency and context
+residency rank tools in almost opposite orders, which is the thing the earlier section
+exists to say and this report independently re-exhibits without noticing.
+
+#### The recommendation that cannot be implemented as written
+
+The report's first suggested `CLAUDE.md` addition is *"Always respond in English"*, citing
+three ignored English-only requests in one session. **This is not a rule that was missing,
+and adding it will not work.** The harness carries a session-level language setting that
+instructs every turn to respond in Russian, and auto-memory records the opposite standing
+preference (`user_language_preference.md`). A preference expressed in chat, and a rule
+written into `CLAUDE.md`, both lose to a setting re-applied on every turn.
+
+So the remedy is a config reconciliation, not a rule — and **that belongs to the user**,
+same as the missing `MAX_SUBAGENTS` cap recorded below. Worth naming because the report
+diagnosed an adherence failure where the mechanism is a contradiction, and shipping its
+suggested fix would produce a rule that is violated by construction on every turn. Same
+shape this repo already records twice: a remedy that requires something the agent cannot
+grant itself.
+
+#### Six suggestions that already exist — which changes what the fix is
+
+| Report suggests | Already lives in | So the gap is |
+|---|---|---|
+| Re-derive any count you publish; state the command | global `CLAUDE.md` → "Absence Is a Claim About a Population" | adherence, not absence |
+| Verify against the real artifact, not a test double | global `CLAUDE.md` → its own section | adherence |
+| Every scout carries an explicit `model:` | `models-router` → "ALWAYS pass an explicit `model:`" | adherence |
+| Treat subagent output as a lead, not a fact | global `CLAUDE.md` → attribution + uncertainty-marker rule | adherence |
+| Keep drafts short, conclusion first | auto-memory `feedback_slack_conciseness` — **Slack-scoped only** | genuinely narrower than the finding |
+| Don't re-ask for approval already granted | the standing reads/analysis grant | adherence |
+
+**A rule that exists and is not followed is a different defect from a rule that is
+missing, and it takes a different fix.** Writing the sixth copy of "re-derive your counts"
+is the cheap move that has already been made five times. The mechanical form is what does
+not exist.
+
+#### The two genuinely new items, both mechanizable
+
+1. **No-truncated-evidence guard.** `| head` on output used as a completeness claim. The
+   report cites `git status | head -4` misread as complete. This repo has its own instance
+   from 2026-08-04: `find … | head -1` returned plugin `0.2.0` out of nine cached versions
+   against a live `0.11.2`, and nearly reported a shipped fix as absent. **Caveat that
+   must survive into the implementation:** a hook cannot see intent, and `git log | head -3`
+   for orientation is legitimate. A blocker would fire constantly and be disabled within a
+   day. It has to warn, and the discriminator — "will this output be reasoned over as
+   complete?" — is not available to a PreToolUse hook. Design that constraint in, or do not
+   build it.
+2. **Worktree guard.** `pwd` confirmed before any Edit/Write in a relay child. The report
+   cites an edit landing in the main checkout instead of the worktree. Mechanical, cheap,
+   no intent problem — the strongest of the report's concrete suggestions.
+
+#### What the report cannot see, recorded so it is not mistaken for coverage
+
+- **It does not distinguish a rule that is absent from one that is present and unfollowed.**
+  Every "add this to CLAUDE.md" suggestion above is stated as if the rule were missing.
+- **It reads config-imposed behaviour as agent lapse.** The language case is the clear one;
+  there may be others.
+- Its satisfaction figures are labelled model-estimated **by the report itself**, and the
+  friction counts are not.
+- It has no view of what the rules cost. "Ignored instructions 3" against a global
+  `CLAUDE.md` that is now well past 500 lines is a plausible symptom of volume rather than
+  of discipline, and nothing in the report can separate those.
+
+#### Actions, ranked
+
+1. **User decision:** reconcile the response-language setting with the recorded English-only
+   preference. Nothing else about language is actionable until that is settled.
+2. Build the worktree guard. Smallest, no intent problem.
+3. Widen the brevity rule past Slack, since that is the one suggestion whose scope is
+   genuinely narrower than the observed friction.
+4. Treat the no-truncated-evidence guard as a design question first — a warn-only hook, or
+   nothing.
+5. Do **not** add the four adherence-gap rules again as prose. If they are worth enforcing,
+   they are worth mechanizing; if they are not worth mechanizing, a sixth restatement will
+   not change the outcome.
+
 ### The workstream advisory copies three helpers from its siblings, and the copies keep diverging
 
 `workstream_page_scan` re-implements, inline, three things `_wikilinks_in`,
@@ -761,6 +857,7 @@ the fixture's call signature (able to assert on `severity`, per the newest shape
 without breaking the three older call sites that only assert on `rule` or `(rule,
 outcome)`) before converting the six call sites, and land it separately from any
 behavior change to `log_fire` itself.
+
 
 ## Tracked elsewhere (pointers, not duplicated here)
 
