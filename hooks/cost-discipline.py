@@ -3394,6 +3394,86 @@ def handle_session_start(payload):
         open_cost_ledger_segment(load_state(session_id))
 
 
+# A reader agent's stem, validated rather than merely matched. Lowercase, digits and single
+# hyphens, ending in `-reader` — which is what all seven on disk already are. The point is not
+# tidiness: this stem is interpolated into a `systemMessage` the model reads as trusted text,
+# and a backtick or a newline in a filename (both legal on POSIX) would escape the inline-code
+# span or inject a line break into a numbered list item.
+_READER_NAME_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*-reader")
+
+
+def reader_roster():
+    """The reader agents that EXIST, read from disk. Returns (names, enumerated, rejected).
+
+    DERIVED, NOT RECITED, and that distinction has a nine-day price attached. The
+    post-compact reminder used to carry a hand-written list of five readers. `gcloud-reader`
+    was added to the fleet on 2026-07-28 — as the fix for an incident whose root cause was
+    that gcloud was the ONE tool with no reader, established from the child's transcript
+    rather than guessed — and the list was never told. So the remedy existed and the only
+    pointer to it did not mention it, which is the same shape that incident's own ROADMAP
+    entry names: a remedy that does not exist from where you are standing fails silently.
+    `notion-reader` would have arrived with the same gap on 2026-08-06.
+
+    The 2026-07-28 fix itself recorded "rosters derived rather than recited" as the principle,
+    and applied it to `when-to-delegate.md` while this message kept reciting. Deriving is
+    therefore not a new idea here; it is the one already written down, finally applied to the
+    second half.
+
+    Two returns, not one, because "the directory holds no readers" and "the directory could
+    not be read" are different answers and the caller must not print the first when it has the
+    second. A roster is a claim about a population; an unreadable directory bounds no
+    population at all.
+
+    Naming convention is the contract: a reader agent is `<tool>-reader.md`. That is what the
+    six existing ones already do, so the convention is observed rather than imposed.
+
+    THREE THINGS THE FIRST VERSION TRUSTED THE FILESYSTEM FOR, all found by review:
+
+    A glob matches by NAME. It does not check that the match is a regular file, so a
+    directory called `foo-reader.md` — or a symlink whose target was deleted — was reported
+    as an installed reader, with `enumerated=True`, i.e. stated with confidence. That
+    reintroduced the exact failure this function exists to remove, one layer down: the model
+    is told a remedy is available and discovers at dispatch time that it is not. `is_file()`
+    resolves symlinks, so one check covers both.
+
+    The name is interpolated into a `systemMessage` the model reads as trusted harness text.
+    A stem containing a backtick escapes the inline-code span; a stem containing a newline —
+    legal in a POSIX filename — injects a line break into what is meant to be one item of a
+    numbered list. So names are validated against the convention rather than merely matched
+    by it, and anything outside `[a-z0-9][a-z0-9-]*-reader` is not passed through.
+
+    And a rejected entry is COUNTED, not dropped in silence. That is the same rule every
+    bound in this file follows: a filter that discards without saying so turns "your reader
+    is misnamed and therefore invisible" into "you have no such reader", which is the class
+    of confusion the whole function was written to end. The third return value is that count.
+    """
+    try:
+        d = HARNESS_DIR / "agents"
+        if not d.is_dir():
+            return ([], False, 0)
+        names, rejected = [], 0
+        # ONE pass, deliberately. The first version walked `*-reader.md` and then `*.md`
+        # separately, which double-counted every entry both globs matched: five bad entries in
+        # a fixture reported as seven rejections. A count offered as evidence is a claim like
+        # any other, and this one was wrong in the direction that looks like thoroughness.
+        for p in d.glob("*.md"):
+            stem = p.stem
+            if _READER_NAME_RE.fullmatch(stem):
+                # `is_file()` resolves symlinks, so a broken link fails here as it should.
+                if p.is_file():
+                    names.append(stem)
+                else:
+                    rejected += 1
+            elif "reader" in stem:
+                # A near-miss is reported rather than dropped: a name containing "reader" that
+                # the convention rejects is far likelier a misnamed agent than a coincidence,
+                # and a misnamed agent is invisible for exactly the reason this function exists.
+                rejected += 1
+        return (sorted(names), True, rejected)
+    except Exception:
+        return ([], False, 0)
+
+
 def handle_post_compact(payload):
     """/clear or auto-compact: reset counters but keep tool_calls_total.
 
@@ -3450,6 +3530,38 @@ def handle_post_compact(payload):
     # validation and the checkpoint silently never lands. PostCompact's only
     # model-visible channel is the top-level `systemMessage` — use emit().
     # (Fixed 2026-06-03 after observing the validation error in a live compact.)
+    # Derived from disk so the roster cannot drift from the fleet. The names ARE the mapping
+    # — `gcloud-reader` for gcloud, `gh-reader` for gh — which is why no per-reader hint list
+    # is kept here: a hint map would be a second hand-maintained list with the same failure.
+    _readers, _enumerated, _rejected = reader_roster()
+    # A rejected entry is REPORTED, never dropped in silence. Without this clause a misnamed
+    # or non-file agent reads as "you have no such reader", which is the confusion the whole
+    # function exists to end — and it would be indistinguishable from a fleet that genuinely
+    # lacks it. Same rule as every other bound in this file: if it discarded something, say so.
+    _skipped = (
+        f" {_rejected} entr{'y' if _rejected == 1 else 'ies'} in that directory matched loosely "
+        f"but not the `<tool>-reader.md` convention and were NOT listed — a misnamed agent is "
+        f"invisible here, so check the name rather than concluding the reader is missing."
+        if _rejected else ""
+    )
+    if not _enumerated:
+        _reflex = (
+            "the reader roster could NOT be enumerated (`~/.claude/agents` unreadable). This "
+            "is not a claim that no readers exist — check before reading inline."
+        )
+    elif not _readers:
+        _reflex = (
+            "no reader agents are installed. Read-only queries have no delegate here, so say "
+            "so rather than reading inline unnoticed — that gap is what the 2026-07-27 "
+            "inline-gcloud incident was." + _skipped
+        )
+    else:
+        _reflex = (
+            "for any read-only query, dispatch the reader whose name matches the tool "
+            "(Haiku). Installed: " + ", ".join(f"`{n}`" for n in _readers) + ". Derived from "
+            "`~/.claude/agents/` at compaction time rather than listed here, so it cannot "
+            "fall behind the fleet. WRITES are never delegated." + _skipped
+        )
     reminder = (
         "**Post-compact checkpoint — cost discipline re-routing required.**\n\n"
         "The conversation summary above describes prior tasks in an execution frame "
@@ -3459,10 +3571,7 @@ def handle_post_compact(payload):
         "the remaining work. Prior model choice is summarized, not live.\n"
         "2. **Invoke `delegation-discipline` skill** before the next bulk read or "
         "sub-agent dispatch. Prior dispatch decisions don't carry over.\n"
-        "3. **Reader-agent reflex**: for kubectl get/describe/logs/top, dispatch "
-        "`kubectl-reader` (Haiku). For gh pr/run/repo reads, dispatch `gh-reader`. "
-        "For Slack reads, `slack-reader`. For Datadog, `datadog-reader`. "
-        "For Jira reads (getJiraIssue/searchJiraIssuesUsingJql/transitions), dispatch `jira-reader`.\n"
+        f"3. **Reader-agent reflex**: {_reflex}\n"
         "4. **Git workflows**: default to the `commit-commands` plugin's `/commit` / "
         "`/commit-push-pr` — cheaper than ad-hoc Bash chains. Project-specific ticket/PR "
         "conventions live in that project's own CLAUDE.md, not a bespoke slash command.\n\n"
