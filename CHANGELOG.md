@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.14.1 (2026-08-07)
+
+### Bug Fixes
+
+- **hook**: Derive the reader-agent roster from the fleet instead of reciting it
+  ([#55](https://github.com/FreddieMcHeart/claude-core/pull/55),
+  [`3798d4b`](https://github.com/FreddieMcHeart/claude-core/commit/3798d4b06fd2a6c39d44a613047c70450f5549a4))
+
+### Documentation
+
+- **roadmap**: Close the statusline HUD divergence entry
+  ([#54](https://github.com/FreddieMcHeart/claude-core/pull/54),
+  [`bced655`](https://github.com/FreddieMcHeart/claude-core/commit/bced6557735f444105d64d00064399dc9821096f))
+
+
 ## v0.14.0 (2026-08-06)
 
 ### Documentation
