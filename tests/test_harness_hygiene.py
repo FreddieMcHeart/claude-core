@@ -20,10 +20,45 @@ DAY = 86400
 
 
 def _git_repo(tmp_path):
+    """A git repo with an `origin/main` ref seeded at an EMPTY initial commit,
+    predating every file a test then creates. hygiene_scan now classifies a
+    dirty path against origin/main's tree, so every low-level scan test below
+    needs a resolvable origin/main to avoid the new "unknown" branch — seeding
+    it empty means every fixture file is "absent from origin/main" and
+    therefore STRANDED, which preserves these tests' original dirty-file-count
+    assertions unchanged under the blob-classification rewrite. Tests that
+    exercise classification directly (parked/differs/unknown) build their own
+    origin/main state past this baseline."""
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+    (tmp_path / ".gitkeep").write_text("")
+    subprocess.run(["git", "-C", str(tmp_path), "add", ".gitkeep"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "seed"], check=True)
+    _set_origin_main(tmp_path, _rev_parse(tmp_path, "HEAD"))
     return tmp_path
+
+
+def _rev_parse(repo, rev):
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", rev],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def _set_origin_main(repo, sha):
+    subprocess.run(
+        ["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", sha],
+        check=True,
+    )
+
+
+def _commit_new_file(repo, name, content):
+    """Write+add+commit `name` and return the resulting HEAD sha."""
+    (repo / name).write_text(content)
+    subprocess.run(["git", "-C", str(repo), "add", name], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", f"add {name}"], check=True)
+    return _rev_parse(repo, "HEAD")
 
 
 def _dirty(repo, name, age_days=0):
@@ -179,6 +214,212 @@ def test_scan_mixed_pile_counts_and_ages_correctly(tmp_path):
     assert samples[0] == ("with space.txt", 40)
 
 
+# ---------------- scan: stranded vs. parked classification (blob sha vs origin/main) ----------------
+# DRIVER tests: none of these pass against the pre-fix hygiene_scan, which never looks at
+# origin/main at all and simply counts every porcelain entry. They are the direct evidence
+# for the architecture decided in the brief — classify by blob sha, three states, never a
+# confident zero when origin/main is unreadable.
+
+def test_scan_counts_file_absent_from_origin_main(tmp_path):
+    """A dirty path that does not exist on origin/main at all is real stranding."""
+    repo = _git_repo(tmp_path)
+    (repo / "new.txt").write_text("brand new")
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 1
+    assert samples[0][0] == "new.txt"
+
+
+def test_scan_excludes_file_matching_origin_main_content(tmp_path):
+    """A dirty path whose on-disk content is byte-identical to origin/main's blob
+    for that path is a parked checkout, not stranded work — must not count."""
+    repo = _git_repo(tmp_path)
+    c0 = _rev_parse(repo, "HEAD")
+    main_sha = _commit_new_file(repo, "same.txt", "unchanged")
+    _set_origin_main(repo, main_sha)
+    # Move the local branch back before same.txt existed (removes it from disk
+    # and the index), then recreate it on disk with IDENTICAL content — same.txt
+    # is now untracked from the local branch's HEAD but matches origin/main
+    # exactly, simulating a checkout parked elsewhere.
+    subprocess.run(["git", "-C", str(repo), "reset", "--hard", "-q", c0], check=True)
+    (repo / "same.txt").write_text("unchanged")
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 0
+    assert samples == []
+
+
+def test_scan_counts_file_differing_from_origin_main_content(tmp_path):
+    """A dirty path that DOES exist on origin/main, but whose content has
+    diverged, is real stranded work — not excused by having a matching path."""
+    repo = _git_repo(tmp_path)
+    c0 = _rev_parse(repo, "HEAD")
+    main_sha = _commit_new_file(repo, "diff.txt", "original")
+    _set_origin_main(repo, main_sha)
+    subprocess.run(["git", "-C", str(repo), "reset", "--hard", "-q", c0], check=True)
+    (repo / "diff.txt").write_text("changed locally")
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 1
+    assert samples[0][0] == "diff.txt"
+
+
+def test_scan_excludes_parked_file_with_space_in_name(tmp_path):
+    """The classification path (ls-tree -z + hash-object) must be as robust to
+    spaces in a filename as the dirty-set parser already is — not exercised by
+    any existing test, since those all use an empty origin/main and so never
+    drive ls-tree's own path parsing for a matched (parked) file."""
+    repo = _git_repo(tmp_path)
+    c0 = _rev_parse(repo, "HEAD")
+    main_sha = _commit_new_file(repo, "my old notes.txt", "unchanged")
+    _set_origin_main(repo, main_sha)
+    subprocess.run(["git", "-C", str(repo), "reset", "--hard", "-q", c0], check=True)
+    (repo / "my old notes.txt").write_text("unchanged")
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 0, "a parked file with a space in its name must still be excluded"
+
+
+def test_scan_deleted_file_counts_even_if_it_existed_on_origin_main(tmp_path):
+    """An uncommitted deletion has no on-disk content to hash and compare, so it
+    is unconditionally stranded — regardless of what origin/main has for that
+    path. This is the architecture's explicit carve-out, not an oversight."""
+    repo = _git_repo(tmp_path)
+    main_sha = _commit_new_file(repo, "gone.txt", "x")
+    _set_origin_main(repo, main_sha)
+    (repo / "gone.txt").unlink()
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 1
+    assert samples[0][0] == "gone.txt"
+
+
+def test_scan_returns_unknown_when_origin_main_missing(tmp_path):
+    """No origin/main ref at all (not even a stale one) must not read as clean."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+    (tmp_path / "f.txt").write_text("x")
+    assert cd.hygiene_scan(tmp_path) == "unknown"
+
+
+def test_scan_clean_repo_is_zero_without_needing_origin_main(tmp_path):
+    """An empty dirty set short-circuits before origin/main is even consulted —
+    no origin/main ref, but nothing to classify, so this must not be 'unknown'."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+    assert cd.hygiene_scan(tmp_path) == (0, 0, [])
+
+
+def test_parked_checkout_fixture_stranded_only(tmp_path):
+    """THE primary evidence fixture (per the brief): a repo parked on a branch
+    whose HEAD predates a batch of files that are, byte-for-byte, what
+    origin/main has — above HYGIENE_MAX_FILES. The pre-fix porcelain count
+    fires on this (asserted directly against raw `git status`, independent of
+    cd's own code, so this assertion holds even before the fix exists); the
+    post-fix blob-classification must stay silent — 0 stranded, all parked."""
+    repo = _git_repo(tmp_path)
+    c0 = _rev_parse(repo, "HEAD")
+    contents = {f"file{i}.txt": f"content-{i}" for i in range(cd.HYGIENE_MAX_FILES + 5)}
+    for name, content in contents.items():
+        (repo / name).write_text(content)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "add files"], check=True)
+    _set_origin_main(repo, _rev_parse(repo, "HEAD"))
+    subprocess.run(["git", "-C", str(repo), "reset", "--hard", "-q", c0], check=True)
+    for name, content in contents.items():
+        (repo / name).write_text(content)  # recreate untracked, identical content
+
+    raw = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "-z", "-uall"],
+        capture_output=True, text=True,
+    ).stdout
+    raw_count = len([f for f in raw.split("\0") if len(f) >= 4])
+    assert raw_count > cd.HYGIENE_MAX_FILES, "fixture must exceed the threshold under the OLD count"
+
+    count, oldest, samples = cd.hygiene_scan(repo)
+    assert count == 0, "every file is byte-identical to origin/main -> parked, not stranded"
+    assert samples == []
+
+
+# ---------------- scan: classification subprocess failures (Important finding, code review) ----------------
+# feature-dev:code-reviewer (2026-08-10) on this branch: every failure branch inside
+# _hygiene_classify_stranded was traced as correct by static reading, but none was actually
+# DRIVEN by a test — every fixture above goes through real git on the happy path, and the one
+# failure-path test (test_scan_returns_unknown_when_origin_main_missing) only exercises the
+# rev-parse branch. These close that gap by forcing ls-tree / hash-object to fail underneath
+# a real repo, leaving `git status` and `rev-parse` genuine.
+
+def _fake_run_forcing_failure(subcommand, mode="returncode"):
+    """A subprocess.run replacement that fails ONLY the call whose argv contains
+    `subcommand`, passing every other call through to the real subprocess.run
+    unchanged (status, rev-parse, and any hashable ls-tree/hash-object call that
+    isn't the one under test)."""
+    real_run = subprocess.run
+
+    class _FakeProc:
+        def __init__(self):
+            self.returncode = 1
+            self.stdout = ""
+            self.stderr = "forced failure for test"
+
+    def _fake(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and subcommand in cmd:
+            if mode == "raise":
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=cd.HYGIENE_GIT_TIMEOUT)
+            return _FakeProc()
+        return real_run(cmd, *args, **kwargs)
+
+    return _fake
+
+
+def test_scan_returns_unknown_when_ls_tree_fails_nonzero(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    (repo / "f.txt").write_text("x")
+    monkeypatch.setattr(cd.subprocess, "run", _fake_run_forcing_failure("ls-tree"))
+    assert cd.hygiene_scan(repo) == "unknown"
+
+
+def test_scan_returns_unknown_when_ls_tree_raises(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    (repo / "f.txt").write_text("x")
+    monkeypatch.setattr(cd.subprocess, "run", _fake_run_forcing_failure("ls-tree", mode="raise"))
+    assert cd.hygiene_scan(repo) == "unknown"
+
+
+def test_scan_returns_unknown_when_hash_object_fails_nonzero(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    (repo / "f.txt").write_text("x")
+    monkeypatch.setattr(cd.subprocess, "run", _fake_run_forcing_failure("hash-object"))
+    assert cd.hygiene_scan(repo) == "unknown"
+
+
+def test_scan_returns_unknown_when_hash_object_raises(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    (repo / "f.txt").write_text("x")
+    monkeypatch.setattr(cd.subprocess, "run", _fake_run_forcing_failure("hash-object", mode="raise"))
+    assert cd.hygiene_scan(repo) == "unknown"
+
+
+def test_scan_returns_unknown_when_hash_object_output_line_count_mismatches(tmp_path, monkeypatch):
+    """hash-object must print exactly one sha per path we sent, in order. A
+    short (or long) response cannot be trusted enough to pair — this must not
+    silently mis-pair a sha to the wrong path."""
+    repo = _git_repo(tmp_path)
+    (repo / "f.txt").write_text("x")
+    (repo / "g.txt").write_text("y")
+    real_run = subprocess.run
+
+    class _MismatchedProc:
+        returncode = 0
+        stdout = "onlyonelineofsha\n"  # 2 paths sent, 1 line back
+        stderr = ""
+
+    def _fake(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and "hash-object" in cmd:
+            return _MismatchedProc()
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(cd.subprocess, "run", _fake)
+    assert cd.hygiene_scan(repo) == "unknown"
+
+
 # ---------------- thresholds ----------------
 
 def _ctx(monkeypatch, count, oldest, prompts_seen=1):
@@ -218,6 +459,23 @@ def test_nudge_warns_against_add_all(monkeypatch):
 def test_unscannable_repo_is_silent(monkeypatch):
     monkeypatch.setattr(cd, "hygiene_scan", lambda repo=None: None)
     assert cd.hygiene_context({"prompts_seen": 1}) is None
+
+
+def test_unknown_origin_main_emits_distinct_message_not_silence(monkeypatch):
+    """The exact distinction the brief mandates: 'could not look' must never
+    read the same as 'clean'. A missing/unreadable origin/main is neither
+    None (total scan failure, stay silent) nor a confident zero-count nudge —
+    it is its own message, said plainly, every time the throttle allows it."""
+    monkeypatch.setattr(cd, "hygiene_scan", lambda repo=None: "unknown")
+    msg = cd.hygiene_context({"prompts_seen": 1})
+    assert msg is not None
+    assert "origin/main" in msg
+    assert "uncommitted files" not in msg, "must not read like the normal count nudge"
+
+
+def test_unknown_origin_main_still_respects_the_throttle(monkeypatch):
+    monkeypatch.setattr(cd, "hygiene_scan", lambda repo=None: "unknown")
+    assert cd.hygiene_context({"prompts_seen": 5}) is None
 
 
 # ---------------- throttle ----------------

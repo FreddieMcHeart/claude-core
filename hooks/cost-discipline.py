@@ -1383,14 +1383,41 @@ def repo_root_of_path(path):
 
 
 def hygiene_scan(repo=None):
-    """Measure uncommitted work in `repo` (default: the harness dir).
+    """Measure STRANDED uncommitted work in `repo` (default: the harness dir) —
+    dirty paths whose content diverges from `origin/main`, not merely every
+    dirty path `git status` reports.
 
-    Returns (count, oldest_age_days, samples) where `samples` is the oldest few
-    (path, age_days) pairs, or None when the scan cannot be trusted — not a git
-    repo, git missing, git failing, or git too slow. Fail-open by design: a
-    hygiene nudge is never worth delaying or breaking a prompt.
+    Why: `~/.claude` is routinely parked on another session's feature branch,
+    and a file already committed on `origin/main` and untouched since still
+    shows up as modified/untracked relative to that branch's HEAD — checkout
+    parking, not stranded work. Classification compares the on-disk blob sha
+    of every dirty path to `origin/main`'s own tree, via ONE `ls-tree` + ONE
+    `hash-object --stdin-paths` call covering every path at once — never one
+    subprocess per file, since this runs on every prompt against
+    HYGIENE_GIT_TIMEOUT. A path byte-identical to origin/main is PARKED (not
+    counted); one that differs, or doesn't exist on origin/main at all, is
+    STRANDED (counted). A deleted path has no on-disk content to hash and is
+    unconditionally STRANDED — an uncommitted deletion is real work regardless
+    of what origin/main has for that path.
 
-    Two git flags carry the whole correctness of this function:
+    We never fetch here (hot path — see HYGIENE_GIT_TIMEOUT). A stale or
+    absent local `origin/main` therefore under-reports in the safe direction
+    (more strandings surface, not fewer) — but that must be SAID, not silently
+    absorbed into a confident zero. See the "unknown" return below.
+
+    Returns:
+      None       — the scan itself failed: not a git repo, git missing, timed
+                   out. Fail-open by design; a hygiene nudge is never worth
+                   delaying or breaking a prompt.
+      "unknown"  — the dirty set was read fine, but `origin/main` could not be
+                   resolved (missing ref, unreadable, or the classification
+                   subprocesses failed) — stranded-vs-parked is undecidable.
+                   The caller must say so, never silently report zero.
+      (count, oldest_age_days, samples) — as before, computed over the
+                   STRANDED subset only. `samples` is the oldest few
+                   (path, age_days) pairs.
+
+    Two git flags carry the whole correctness of the underlying dirty-set read:
 
     `-z`   — porcelain QUOTES paths containing spaces or non-ASCII by default
              (core.quotePath), so `my old notes.txt` arrives as `"my old
@@ -1443,27 +1470,127 @@ def hygiene_scan(repo=None):
         try:
             mtime = (repo / path).stat().st_mtime
             age = max(0, int((now - mtime) // 86400))
+            deleted = False
         except OSError:
             # The path is gone (a deletion) or unreadable. A deletion cannot be
             # stale, so 0 is right; -z makes an unreadable path near-impossible.
             age = 0
-        entries.append((path, age))
+            deleted = True
+        entries.append((path, age, deleted))
 
     if not entries:
+        return (0, 0, [])  # nothing dirty — short-circuits before origin/main is
+        # even consulted, so a repo with no origin/main and nothing dirty must
+        # not be misread as "unknown" (see test_scan_clean_repo_is_zero_...).
+
+    stranded = _hygiene_classify_stranded(repo, entries)
+    if stranded is None:
+        return "unknown"
+    if not stranded:
         return (0, 0, [])
-    oldest = max(age for _, age in entries)
-    samples = sorted(entries, key=lambda e: -e[1])[:HYGIENE_SAMPLE_COUNT]
-    return (len(entries), oldest, samples)
+    oldest = max(age for _, age in stranded)
+    samples = sorted(stranded, key=lambda e: -e[1])[:HYGIENE_SAMPLE_COUNT]
+    return (len(stranded), oldest, samples)
+
+
+def _hygiene_classify_stranded(repo, entries):
+    """Split `entries` (path, age_days, deleted) into the STRANDED subset by
+    comparing on-disk blob sha to origin/main's tree for each path.
+
+    Returns None when origin/main cannot be resolved or the classification
+    subprocesses fail — the caller (`hygiene_scan`) must surface that as
+    "unknown", never silently fold it into a zero-length stranded list.
+
+    Exactly two subprocesses beyond the caller's own `git status`: one
+    `ls-tree` for the whole origin/main tree, one `hash-object --stdin-paths`
+    for every non-deleted dirty path at once. Never one call per file — this
+    runs on every prompt against HYGIENE_GIT_TIMEOUT.
+    """
+    try:
+        ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--verify", "-q", "origin/main^{commit}"],
+            capture_output=True, text=True, timeout=HYGIENE_GIT_TIMEOUT,
+        )
+        if ref.returncode != 0:
+            return None
+    except Exception:
+        return None
+
+    try:
+        tree = subprocess.run(
+            ["git", "-C", str(repo), "ls-tree", "-r", "-z", "origin/main"],
+            capture_output=True, text=True, errors="surrogateescape",
+            timeout=HYGIENE_GIT_TIMEOUT,
+        )
+        if tree.returncode != 0:
+            return None
+    except Exception:
+        return None
+
+    main_blobs = {}
+    for record in tree.stdout.split("\0"):
+        if not record:
+            continue
+        meta, sep, path = record.partition("\t")
+        if not sep:
+            continue
+        parts = meta.split()
+        if len(parts) >= 3:
+            main_blobs[path] = parts[2]  # mode, type, sha, ...
+
+    # Only non-deleted paths have on-disk content to hash. A deleted path is
+    # unconditionally stranded below — it never enters this batch.
+    hashable = [(path, age) for path, age, deleted in entries if not deleted]
+    on_disk_sha = {}
+    if hashable:
+        try:
+            hashed = subprocess.run(
+                ["git", "-C", str(repo), "hash-object", "--stdin-paths"],
+                input="".join(f"{path}\n" for path, _ in hashable),
+                capture_output=True, text=True, errors="surrogateescape",
+                timeout=HYGIENE_GIT_TIMEOUT,
+            )
+            if hashed.returncode != 0:
+                return None
+        except Exception:
+            return None
+        shas = hashed.stdout.split("\n")
+        if shas and shas[-1] == "":
+            shas.pop()
+        if len(shas) != len(hashable):
+            # git printed a different number of lines than paths we sent —
+            # cannot trust the pairing enough to classify anything.
+            return None
+        on_disk_sha = {path: sha for (path, _), sha in zip(hashable, shas)}
+
+    stranded = []
+    for path, age, deleted in entries:
+        if deleted:
+            stranded.append((path, age))
+            continue
+        main_sha = main_blobs.get(path)
+        if main_sha is not None and on_disk_sha.get(path) == main_sha:
+            continue  # PARKED — byte-identical to origin/main, not counted
+        stranded.append((path, age))  # STRANDED — differs, or absent from main
+    return stranded
 
 
 def hygiene_context(state):
-    """Advisory string when the harness repo's uncommitted pile is over a
+    """Advisory string when the harness repo's stranded-work pile is over a
     threshold, else None.
 
     Throttled by prompts_seen: fires on the first prompt of a session and every
     HYGIENE_PROMPT_INTERVAL-th prompt after. Advisory only — blocking a prompt
     over a dirty git tree would be absurd; the point is to surface finished work
     that stranded, not to gate anything.
+
+    Three states from hygiene_scan, three outcomes here — "could not look" must
+    never read the same as "clean": None (scan itself failed) stays silent, same
+    as always; "unknown" (dirty set read fine, origin/main unreadable) ALWAYS
+    speaks when the throttle allows it, since we have no idea whether the real
+    stranded count is 0 or 500 and reporting a confident zero would be worse
+    than saying nothing; only a real (count, oldest, samples) goes through the
+    normal threshold check below.
     """
     seen = state.get("prompts_seen", 0)
     if seen < 1 or (seen - 1) % HYGIENE_PROMPT_INTERVAL != 0:
@@ -1471,6 +1598,16 @@ def hygiene_context(state):
     scan = hygiene_scan()
     if scan is None:
         return None
+    if scan == "unknown":
+        return (
+            "**Harness hygiene** — could not tell stranded work from a parked "
+            "checkout in `~/.claude`'s dirty tree: `origin/main` is missing or "
+            "unreadable locally. This check never fetches (hot path), so a stale "
+            "or absent local ref reads exactly like no upstream at all — the safe "
+            "direction (it would over-report strandings, never hide them), but not "
+            "reporting a count here rather than guessing zero. Run `git fetch "
+            "origin` in `~/.claude` if you want the pulse to resume."
+        )
     count, oldest, samples = scan
 
     reasons = []
