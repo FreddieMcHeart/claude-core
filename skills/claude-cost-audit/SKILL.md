@@ -24,6 +24,18 @@ python lib/cost_ledger_report.py --json     # machine-readable {totals, by_tool,
 
 Use this to find *which* sessions are worth drilling into (highest est result-tokens / $/turn), then run the full JSONL audit below only on those. Note the ledger measures **in-context result volume** (the cache-reread driver, reset per compaction), not billed API cost — the JSONL audit remains the source of truth for actual token spend.
 
+Where the ledger measures in-context volume, **`api_usage_report.py` measures what the API actually billed** — the real `message.usage` figures the transcripts already carry, scoped to a rate-limit window. Claude Code prints those windows as percentages only, so this supplies the absolute number behind "43% of 5h":
+
+```bash
+python lib/api_usage_report.py                      # 5h window: totals, per-session table, tok/min
+python lib/api_usage_report.py --window 7d --top 0  # weekly, every session
+python lib/api_usage_report.py --json               # {window, totals, sessions, by_model, coverage}
+```
+
+Tokens are split input / output / cache-read / cache-write because they are not interchangeable: measured 2026-08-11, cache reads were **96% of both windows** on this machine, and they price roughly an order of magnitude below fresh input, so one blended figure would mislead in the expensive direction. It reports **no dollar figure** — no price constant with a citable source was available, and the separately-installed `claude-cost` tool is not one: its table names `claude-opus-4-6`/`claude-sonnet-4-6` while the transcripts here carry `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-sonnet-5` and `claude-fable-5`, and a substring fallback applies the older rate silently rather than failing.
+
+It states two limits itself rather than leaving them to the reader. Without `~/.claude/state/rate-limits.json` — written by the status line, the only thing on the machine that receives the harness's window data — the window ends *now* instead of at the real reset, and share-of-limit is not computed. And live sessions append while the scan runs, so two runs minutes apart legitimately differ; the report stamps its own scan time for that reason.
+
 For the *other* half — not what cost, but where the discipline itself was worked past — run the **fire-log report**. The hook appends one line per fired nudge to `~/.claude/state/cost-discipline-log.jsonl`; this ranks the rules that fire most and splits warn/info/block:
 
 ```bash
