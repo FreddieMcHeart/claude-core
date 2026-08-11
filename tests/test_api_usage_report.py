@@ -196,6 +196,23 @@ def test_resolve_window_falls_back_to_now_and_names_the_fallback():
     assert since == NOW - timedelta(days=7)
 
 
+def test_resolve_window_rejects_a_reset_time_already_in_the_past():
+    """A stale cache must not be anchored on — it would look exact and be wrong."""
+    windows = {"five_hour": {"resets_at": (NOW - timedelta(hours=3)).timestamp()}}
+    since, until, source = rpt.resolve_window("5h", windows, now=NOW)
+    assert source == "stale_resets_at"
+    assert until == NOW
+    assert since == NOW - timedelta(hours=5)
+
+
+def test_format_report_names_a_stale_reset_time():
+    payload = rpt.build_json("5h", {}, {"files_seen": 0, "files_skipped_mtime": 0,
+                                        "files_unreadable": 0, "parse_errors": 0,
+                                        "multi_iteration": 0, "no_timestamp": 0},
+                             NOW - timedelta(hours=5), NOW, "stale_resets_at", 40)
+    assert "reset time has already passed" in rpt.format_report(payload)
+
+
 def test_resolve_window_rejects_a_bool_resets_at():
     windows = {"five_hour": {"resets_at": True}}
     _, _, source = rpt.resolve_window("5h", windows, now=NOW)

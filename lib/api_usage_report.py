@@ -281,7 +281,13 @@ def resolve_window(name, windows, now=None):
     resets_at = entry.get("resets_at")
     if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool):
         until = datetime.fromtimestamp(float(resets_at), tz=UTC)
-        return until - span, until, "resets_at"
+        # A reset time in the PAST means the window rolled over and the status line
+        # has not run since — the file is a cache, and a cache nobody refreshed is
+        # not a fact. Anchoring on it would silently report a window that already
+        # ended, which is worse than the honest fallback because it looks exact.
+        if until >= now:
+            return until - span, until, "resets_at"
+        return now - span, now, "stale_resets_at"
     return now - span, now, "now"
 
 
@@ -393,6 +399,9 @@ def format_report(payload):
     if win["boundary_source"] == "now":
         lines.append("  NOTE: no resets_at available, window ends now rather than "
                      "at the real reset.")
+    elif win["boundary_source"] == "stale_resets_at":
+        lines.append("  NOTE: the recorded reset time has already passed, so the status line "
+                     "has not refreshed it. Window ends now rather than at the real reset.")
     if win["used_percentage"] is None:
         lines.append("  NOTE: no used_percentage available, so share-of-limit is not computed.")
     else:
