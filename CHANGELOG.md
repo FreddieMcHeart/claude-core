@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.15.0 (2026-08-11)
+
+### Bug Fixes
+
+- **lib**: A reset time already in the past is stale, not a boundary
+  ([#57](https://github.com/FreddieMcHeart/claude-core/pull/57),
+  [`41ff183`](https://github.com/FreddieMcHeart/claude-core/commit/41ff1835c8ddc308edf56631d6a1f14051dbac49))
+
+### Features
+
+- **lib**: Report real API token usage per rate-limit window
+  ([#57](https://github.com/FreddieMcHeart/claude-core/pull/57),
+  [`41ff183`](https://github.com/FreddieMcHeart/claude-core/commit/41ff1835c8ddc308edf56631d6a1f14051dbac49))
+
+
 ## v0.14.1 (2026-08-07)
 
 ### Bug Fixes
