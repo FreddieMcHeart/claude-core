@@ -18,6 +18,8 @@ Two separate defects are pinned here, because they failed independently:
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 MOD = Path(__file__).resolve().parents[1] / "hooks" / "cost-discipline.py"
 spec = importlib.util.spec_from_file_location("cost_discipline_rlm", MOD)
 cd = importlib.util.module_from_spec(spec)
@@ -27,6 +29,21 @@ spec.loader.exec_module(cd)
 # not English words so the tests can tell "rejected as prose" from "rejected".
 REPOS = {"agent", "skills", "hooks", "commands", "mcp", "profile",
          "cryptobot", "helm-charts", "env-conf", "smart-payments"}
+
+
+@pytest.fixture
+def pinned_repos(monkeypatch):
+    """Pin enumerate_repos() for tests that go through rlm_fanout_context().
+
+    match_repos takes its repo set as an argument, so those tests are already
+    hermetic. rlm_fanout_context does not — it calls enumerate_repos() itself,
+    which walks the real ~/mama. Four tests therefore verified this machine's
+    filesystem rather than the code, and one of them passed VACUOUSLY anywhere
+    ~/mama is absent: with no repos there is nothing to match, so "does not
+    fire" is satisfied by having nothing to fire on.
+    """
+    monkeypatch.setattr(cd, "enumerate_repos", lambda: set(REPOS))
+    return REPOS
 
 
 # --------------------------------------------------------------------------
@@ -41,7 +58,11 @@ def test_bare_english_words_are_not_repo_mentions():
     assert cd.match_repos(prompt, REPOS) == set()
 
 
-def test_relay_prose_naming_two_collision_words_does_not_fire():
+def test_relay_prose_naming_two_collision_words_does_not_fire(pinned_repos):
+    """PINNED. Calling rlm_fanout_context reaches the real enumerate_repos(),
+    which scans this machine's ~/mama. On a machine without one it returns the
+    empty set and this test passes because there was nothing to match — a
+    vacuous pass, in a suite whose subject is checks that cannot fail."""
     prompt = ("Reviewed your agent dispatch and the hooks it registers; "
               "the skills look right to me.")
     assert cd.rlm_fanout_context(prompt) is None
@@ -126,6 +147,7 @@ def test_genuine_cross_repo_phrases_still_fire():
 # --------------------------------------------------------------------------
 
 def _advisory_texts():
+    """Callers must take the `pinned_repos` fixture — see its docstring."""
     out = []
     for prompt in ("what talks to what across services",
                    "how does data move between ~/mama/x/agent and ~/mama/x/skills"):
@@ -135,7 +157,7 @@ def _advisory_texts():
     return out
 
 
-def test_advisory_does_not_manufacture_consent():
+def test_advisory_does_not_manufacture_consent(pinned_repos):
     """The banned construction, verbatim from the version this replaces:
     "Open your response with 'Running rlm-fanout — Esc to stop' and proceed
     unless the user objects." """
@@ -146,7 +168,7 @@ def test_advisory_does_not_manufacture_consent():
         assert "esc to stop" not in low, text
 
 
-def test_advisory_says_a_workflow_needs_the_users_request():
+def test_advisory_says_a_workflow_needs_the_users_request(pinned_repos):
     """The harness forbids Workflow without an explicit user request. The old
     text told sessions to start one anyway, so the advisory and the harness
     disagreed on every fire."""
@@ -154,7 +176,7 @@ def test_advisory_says_a_workflow_needs_the_users_request():
         assert "explicit request" in text.lower(), text
 
 
-def test_advisory_still_names_the_workflow_and_the_repos():
+def test_advisory_still_names_the_workflow_and_the_repos(pinned_repos):
     """Softening the instruction must not cost the information. If the advisory
     stops naming rlm-fanout or the repos it saw, it has become decoration."""
     r = cd.rlm_fanout_context(

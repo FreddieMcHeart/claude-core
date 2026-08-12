@@ -1316,8 +1316,17 @@ CROSS_REPO_PHRASES = ("across services", "across repos", "across our repos",
 # Directory trees whose names collide with repo names but which are not repos.
 # The harness discusses its own ~/.claude/{skills,hooks,commands,agents} in most
 # of its prompts, and four of those are also names under ~/mama.
-FOREIGN_ROOTS = (".claude/", "plugins/", "node_modules/", "site-packages/", "dist/")
+FOREIGN_ROOT_SEGMENTS = frozenset({
+    ".claude", "plugins", "node_modules", "site-packages", "dist", "build",
+    ".git", "vendor", "target",
+})
 REPO_CONTEXT_WORDS = r"(?:repo|repository|repos|service|codebase|project)"
+
+# Longest run of path characters either side of a match that will be walked to
+# decide what the match sits inside. Bounds an otherwise quadratic scan on the
+# UserPromptSubmit hot path — see _denotes_repo. 256 is far past any real path
+# segment and far short of anything that costs measurable time.
+MAX_TOKEN_WALK = 256
 WRITE_VERBS = ("fix", "implement", "deploy", "create", "add", "remove",
                "delete", "migrate", "rename", "refactor", "update")
 
@@ -1354,17 +1363,42 @@ def _denotes_repo(low, i, j):
       a bare word            -> True only if something adjacent says "repo",
                                 "service", "codebase", … or a `.git` follows.
     """
+    # BOUNDED. Unbounded, this walk is quadratic and hangs the hook: an input
+    # like ".claude/agent/" repeated cannot break out of the caller's loop
+    # (every occurrence classifies False), so each of n occurrences re-walks the
+    # whole run. Measured: 20,000 repetitions did not finish inside 120s. The
+    # first attempt to reproduce it used "agent/" repeated, which matches on
+    # occurrence one and hits the caller's `break` — linear, 0.02s at 300k chars,
+    # and it would have dismissed a real defect. A path segment beyond this bound
+    # is not a repo reference anyway.
+    lo = max(0, i - MAX_TOKEN_WALK)
+    hi = min(len(low), j + MAX_TOKEN_WALK)
     a = i
-    while a > 0 and (low[a - 1].isalnum() or low[a - 1] in "./~_-"):
+    while a > lo and (low[a - 1].isalnum() or low[a - 1] in "./~_-"):
         a -= 1
     b = j
-    while b < len(low) and (low[b].isalnum() or low[b] in "./~_-"):
+    while b < hi and (low[b].isalnum() or low[b] in "./~_-"):
         b += 1
     token = low[a:b]
-    if any(root in token for root in FOREIGN_ROOTS):
+
+    # Segment-wise, not substring: `"dist/" in token` also matches inside
+    # `frontend-dist/`, which excluded a directory that has nothing to do with a
+    # build output. Compare whole path segments.
+    segments = [s for s in token.split("/") if s]
+    if any(s in FOREIGN_ROOT_SEGMENTS for s in segments):
         return False
-    if "/" in token:
+
+    if "mama/" in token:
+        return True                      # the tree these names are enumerated from
+    # A bare `helm-charts/` is a repo reference; `cmd/agent/main.go` and
+    # `github.com/some-org/agent` are not. The discriminator is whether the name
+    # is the FIRST segment of the path — anything deeper is a directory inside
+    # some other project that happens to share the name. `"/" in token` alone
+    # accepted both, and accepted every github URL to an unrelated project of
+    # the same name.
+    if segments and segments[0] == low[i:j] and "/" in token:
         return True
+
     before = low[max(0, i - 24):i]
     after = low[j:j + 24]
     return bool(re.search(rf"{REPO_CONTEXT_WORDS}\s+(?:named\s+)?$", before)
@@ -2706,11 +2740,21 @@ def handle_user_prompt_submit(payload):
         except Exception:
             pass  # ditto — a vault lookup is never worth a broken prompt
 
-    rlm = rlm_fanout_context(prompt)
-    if rlm:
-        ctx, repos = rlm
-        parts.append(ctx)
-        log_fire("workflow_suggest_rlm", session_id, "info", repos=repos)
+    # Wrapped like its five siblings above. It was the only advisory here
+    # without a handler — pre-existing, on origin/main too — and the comment at
+    # the top of this block already says why every other one has its own: an
+    # uncaught raise here reaches main()'s top-level except, which exits 0
+    # WITHOUT writing additionalContext, silently discarding the five advisories
+    # already computed into `parts` and leaving no log_fire trace. That is the
+    # silent-disarm shape the comment names, sitting directly beneath it.
+    try:
+        rlm = rlm_fanout_context(prompt)
+        if rlm:
+            ctx, repos = rlm
+            parts.append(ctx)
+            log_fire("workflow_suggest_rlm", session_id, "info", repos=repos)
+    except Exception:
+        pass  # a cost suggestion is never worth losing the other five
 
     if not parts:
         return
