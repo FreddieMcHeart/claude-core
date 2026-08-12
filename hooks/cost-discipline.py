@@ -1290,7 +1290,34 @@ REPO_DENYLIST = {
     # scratch/test repos
     "test-repo", "test-tf", "test.me", "andrii_test_repo",
 }
-CROSS_REPO_PHRASES = ("across services", "end to end", "end-to-end")
+# Phrases that denote the USER'S REQUEST spanning repositories. Each was scored
+# against 8,855 read-shaped real prompts from this machine's transcripts before
+# being kept or dropped; the counts are the reason, not the intuition:
+#
+#   'end-to-end'   175 fires   DROP — a routine engineering adjective
+#   'end to end'    27 fires   DROP — same
+#   'cross-repo'   370 fires   DROP — and this one is the sharp lesson: it is
+#                              the vocabulary of THIS FEATURE'S OWN
+#                              documentation. models-router and
+#                              delegation-discipline both say it, so the
+#                              detector was firing on text describing the
+#                              detector. A trigger must not key on a word its
+#                              own docs use.
+#   'across services' 4 fires  KEEP — rare, and denotes the request
+#   'across repos'    2 fires  KEEP — same
+#
+# The zero-fire variants below cost nothing on this corpus and cover phrasings it
+# happens not to contain. Adding a phrase here is cheap; adding a COMMON one is
+# what produced a 26% fire rate.
+CROSS_REPO_PHRASES = ("across services", "across repos", "across our repos",
+                      "across the repos", "spans multiple repos",
+                      "multiple repositories", "between repos")
+
+# Directory trees whose names collide with repo names but which are not repos.
+# The harness discusses its own ~/.claude/{skills,hooks,commands,agents} in most
+# of its prompts, and four of those are also names under ~/mama.
+FOREIGN_ROOTS = (".claude/", "plugins/", "node_modules/", "site-packages/", "dist/")
+REPO_CONTEXT_WORDS = r"(?:repo|repository|repos|service|codebase|project)"
 WRITE_VERBS = ("fix", "implement", "deploy", "create", "add", "remove",
                "delete", "migrate", "rename", "refactor", "update")
 
@@ -1314,11 +1341,69 @@ def enumerate_repos():
     return repos
 
 
+def _denotes_repo(low, i, j):
+    """Does the name at low[i:j] refer to a repository, or is it just the word?
+
+    Classifies the maximal path-ish token the match sits inside. Three outcomes,
+    and the middle one is the whole point:
+
+      under a foreign root   -> False. `~/.claude/skills/` is a path, and is not
+                                a repo. Excluded BEFORE the path test, or every
+                                harness self-reference counts.
+      a path shape           -> True.  `mama/uncapped/agent`, `helm-charts/`.
+      a bare word            -> True only if something adjacent says "repo",
+                                "service", "codebase", … or a `.git` follows.
+    """
+    a = i
+    while a > 0 and (low[a - 1].isalnum() or low[a - 1] in "./~_-"):
+        a -= 1
+    b = j
+    while b < len(low) and (low[b].isalnum() or low[b] in "./~_-"):
+        b += 1
+    token = low[a:b]
+    if any(root in token for root in FOREIGN_ROOTS):
+        return False
+    if "/" in token:
+        return True
+    before = low[max(0, i - 24):i]
+    after = low[j:j + 24]
+    return bool(re.search(rf"{REPO_CONTEXT_WORDS}\s+(?:named\s+)?$", before)
+                or re.match(rf"\s*(?:'s\s+)?{REPO_CONTEXT_WORDS}\b", after)
+                or ".git" in after)
+
+
 def match_repos(text, repos):
-    """Repo names appearing in text as hyphen-aware whole tokens (NEW-1).
-    NOT naive \\b: regex \\b treats '-' as a boundary, so \\bfoo\\b would match
-    inside 'foo-ui'. Here a match is rejected if the char before/after is a word
-    char OR a hyphen — so 'foo' inside 'foo-ui' does not count, 'foo-ui' does."""
+    """Repo names appearing in text WHERE THEY DENOTE A REPOSITORY.
+
+    This used to be a whole-token match: the name anywhere in the prose, with
+    hyphen-aware boundaries. That is a proxy for "the user is asking about this
+    repository", and the two coincided only while repos were named things like
+    `mondu-infra`. They diverged silently the moment one was named `agent`.
+    Measured on 8,947 real prompts from this machine: the token rule fired on
+    2,337 of them — 26.12%, better than one prompt in four — driven by `agent`
+    (1417), `skills` (1207), `commands` (604), `hooks` (552), `mcp` (376). Those
+    are not repo mentions; they are the harness talking about itself.
+
+    REPO_DENYLIST was the previous answer to exactly this, and its own comment
+    says "generic tokens — collide with ordinary prose". It cannot work: it is a
+    hand-kept list of the ordinary words someone has already been burned by, and
+    roughly a third of the 46 names under ~/mama are words this harness says
+    daily. A dictionary filter fails too, and measurably — /usr/share/dict/words
+    holds singulars, so it catches `agent` and misses `skills`, `hooks` and
+    `commands`, which is 1 of the 4 names actually observed misfiring.
+
+    So the test is structural: find the name, then classify the TOKEN it sits
+    inside. A path shape denotes a repo. A bare word denotes one only when
+    something adjacent says so. Anything under a foreign root is excluded even
+    though it is a path — `~/.claude/skills/` is not `~/mama/<group>/skills`.
+
+    Measured result of this rule on the same corpus: 524 fires, 5.86%, with every
+    true positive the old rule caught still caught. Two earlier drafts are worth
+    recording because each looked right and was not: anchoring on any `/` before
+    the name kept ~590 false fires (it matches inside ~/.claude), and anchoring
+    only on `mama/` lost real ones (`helm-charts/` is a legitimate reference, and
+    a trailing `?` defeated a hand-written character class).
+    """
     found = set()
     low = text.lower()
     for name in repos:
@@ -1332,7 +1417,8 @@ def match_repos(text, repos):
             before = low[i - 1] if i > 0 else ""
             after = low[j] if j < len(low) else ""
             if (not (before.isalnum() or before in {"_", "-"})
-                    and not (after.isalnum() or after in {"_", "-"})):
+                    and not (after.isalnum() or after in {"_", "-"})
+                    and _denotes_repo(low, i, j)):
                 found.add(name)
                 break
             start = i + 1
@@ -2473,18 +2559,38 @@ def rlm_fanout_context(prompt):
     repos = sorted(match_repos(prompt, enumerate_repos()))
     if not (len(repos) >= 2 or has_cross_repo_phrase(prompt)):
         return None  # not cross-repo → silent
+    # PHRASING. This used to read: "Open your response with 'Running rlm-fanout —
+    # Esc to stop' and proceed unless the user objects."
+    #
+    # That is an instruction carrying a pre-supplied opt-out from someone who was
+    # never shown the question — it asks the agent to read silence, from a human
+    # who has not been addressed, as assent. It is the same shape as a relayed
+    # "he already said yes", and harder to refuse because it arrives inside the
+    # machinery rather than from a peer. Three sessions were hit by it in one day
+    # and all three refused; each reported that refusing felt like disobedience.
+    #
+    # It also instructed sessions to violate a standing prohibition: the harness
+    # forbids Workflow without an explicit user request, so on every fire the
+    # advisory and the harness pulled in opposite directions.
+    #
+    # A hook may inform, recommend, or block. It may not manufacture consent on
+    # the user's behalf. So: state the observation, name the cheaper shape, and
+    # leave the decision where it belongs.
     if repos:
-        ctx = (f"Cross-repo investigation detected (repos: {', '.join(repos)}). "
-               f"Default to running the `rlm-fanout` workflow with `args.scopes` set to "
-               f"those repos (wiki-gate first, ~150k cap). Open your response with "
-               f"'Running rlm-fanout — Esc to stop' and proceed unless the user objects. "
-               f"Do NOT hand-roll inline cross-repo reads.")
+        ctx = (f"Cost note — this prompt names more than one repository "
+               f"({', '.join(repos)}). If it turns into a wide read across them, "
+               f"the `rlm-fanout` workflow with `args.scopes` set to those repos "
+               f"(wiki-gate first, ~150k cap) is cheaper than inline reads. A "
+               f"workflow needs the user's explicit request, so offer it rather "
+               f"than starting one — and ignore this line if the prompt merely "
+               f"mentions the names.")
     else:
-        ctx = ("Cross-repo investigation detected (topology phrase). Default to running "
-               "the `rlm-fanout` workflow (no scopes — it uses its curated default plus the "
-               "boundary-free call-chain scout; wiki-gate first, ~150k cap). Open with "
-               "'Running rlm-fanout — Esc to stop' and proceed unless the user objects. "
-               "Do NOT hand-roll inline cross-repo reads.")
+        ctx = ("Cost note — this prompt describes work spanning repositories. If it "
+               "turns into a wide read, the `rlm-fanout` workflow (no scopes — it "
+               "uses its curated default plus the boundary-free call-chain scout; "
+               "wiki-gate first, ~150k cap) is cheaper than inline reads. A workflow "
+               "needs the user's explicit request, so offer it rather than starting "
+               "one.")
     return ctx, repos
 
 
