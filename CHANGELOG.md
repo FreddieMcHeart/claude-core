@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.15.1 (2026-08-12)
+
+### Bug Fixes
+
+- **hook**: Rlm-fanout must fire on repo references, not ordinary English
+  ([#58](https://github.com/FreddieMcHeart/claude-core/pull/58),
+  [`1c32305`](https://github.com/FreddieMcHeart/claude-core/commit/1c323058cb72c7bb326b5761690dfb4c9eafe89f))
+
+- **rlm-fanout**: Bound the token walk, and stop matching foreign paths
+  ([#58](https://github.com/FreddieMcHeart/claude-core/pull/58),
+  [`1c32305`](https://github.com/FreddieMcHeart/claude-core/commit/1c323058cb72c7bb326b5761690dfb4c9eafe89f))
+
+- **rlm-fanout**: Fire on repo references, not on ordinary English words
+  ([#58](https://github.com/FreddieMcHeart/claude-core/pull/58),
+  [`1c32305`](https://github.com/FreddieMcHeart/claude-core/commit/1c323058cb72c7bb326b5761690dfb4c9eafe89f))
+
+
 ## v0.15.0 (2026-08-11)
 
 ### Bug Fixes
