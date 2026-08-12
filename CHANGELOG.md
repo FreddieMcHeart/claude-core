@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.16.0 (2026-08-12)
+
+### Features
+
+- **hygiene**: Count stranded work, not checkout parking
+  ([#56](https://github.com/FreddieMcHeart/claude-core/pull/56),
+  [`953507c`](https://github.com/FreddieMcHeart/claude-core/commit/953507c1c6b02997c123a43a00386d10b30acc87))
+
+
 ## v0.15.1 (2026-08-12)
 
 ### Bug Fixes
