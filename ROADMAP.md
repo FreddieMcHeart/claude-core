@@ -1028,6 +1028,78 @@ the harness fires PostToolUse on a failed dispatch cannot be determined from sou
 rather than a finding, which is the correct handling and the reason it is written down at
 all** — one live test settles it.
 
+## claude-harness
+
+The item below concerns a skill that lives in `claude-harness` (`skills/engineer-design-diagram`),
+not in this repo. It is recorded here because this file is the only durable index of open
+follow-ups on this machine, and a second index would be a second place to forget.
+
+### Add an ELK layout stage to `engineer-design-diagram`, before the connector
+
+Filed 2026-08-14 from `Uncapped-Main`, out of a real case. Not urgent and not gated — pick up
+on request, like everything else here. **Every figure below is the filer's, measured by them
+and not re-derived.** The proposal does not depend on any of them being exact, but anyone
+acting on the numbers should re-check them first.
+
+**The gap.** The skill's docs-layout mode HAND-PLACES nodes: rows, planes and card order are
+authored by the model. Its own reference page is 14 nodes, and its documented fallback to
+Mermaid triggers above 50. Between roughly 15 and 50 neither path is good — too many nodes to
+place by hand without the layout collapsing, too few to justify abandoning the visual system
+and shipping raw Mermaid. Hit for real on 2026-08-14: a Terraform state-dependency graph, 36
+nodes and 35 edges, squarely in the band.
+
+**What is actually missing.** The skill already runs a build-time stage in a browser — the
+connector MEASURES real card rects, routes the arrows, and the coordinates are baked out so
+shipped output stays JS-free. What that stage does not do is decide WHERE THE CARDS GO.
+Placement is the manual part, and placement is the part that does not scale.
+
+**Proposal.** Insert a layout stage before the connector, at the build-time point that already
+exists and already bakes out:
+
+```
+nodes+edges -> ELK computes x,y -> cards placed at those coordinates
+            -> EXISTING connector routes arrows
+            -> EXISTING geometry gate measures
+            -> bake
+```
+
+**Do not borrow Mermaid — borrow what Mermaid borrows.** Checked against Mermaid's source by
+the filer rather than assumed: Mermaid WRAPS third-party layout engines instead of implementing
+one. Its default is `dagre`; ELK was moved OUT into `@mermaid-js/layout-elk` in v11 and attaches
+through a public extension point, `registerLayoutLoaders`. Layout is separable from parsing
+there too — `getDiagramFromText` parses only, and positions appear later in `draw()`. So pulling
+in Mermaid to reach a library you can depend on directly is backwards.
+
+**Prefer ELK over dagre, despite dagre being Mermaid's default.** The skill's PLANES are
+semantic (domain / cluster / cloud) while dagre's ranks are topological, and the two will fight:
+a node belongs to a plane for reasons the graph structure knows nothing about. ELK supports
+explicit partitions and groups, so the semantic grouping survives layout instead of being
+overwritten by it.
+
+**Why this is a stage and not a rewrite.** It does not touch the connector invariants or the
+geometry gate. Those are about ARROWS; this is about PLACEMENT. Nothing currently enforced
+changes, and nothing currently passing has to be re-earned. That separation is the whole reason
+it is a clean insertion.
+
+**Acceptance criteria.**
+
+- A 30–50 node graph renders in docs-layout with no hand-authored rows.
+- Semantic planes survive layout — every node stays in the plane it was assigned.
+- The geometry gate's checks pass on the generated page, measured rather than assumed.
+- Shipped output remains JS-free: the layout stage bakes out exactly as the connector does.
+- The Mermaid fallback above 50 nodes still exists and still triggers.
+
+**NOT SETTLED — and each of these is a reason the ticket is not simply "add elkjs".**
+
+- Whether ELK's grouping is expressive enough for the skill's plane model, or whether planes
+  have to become ELK partitions with a translation layer between them.
+- Whether the connector's routing quality holds on ELK-produced coordinates. It was tuned
+  against hand-placed layouts with deliberately wide gutters, and the skill's own docs say
+  gutter width is what fixed most micro-collisions — so the input distribution changes
+  underneath a component calibrated on the old one.
+- Whether elkjs's size is acceptable as a build dependency. Irrelevant to shipped output, which
+  bakes out, but it is a dependency nonetheless.
+
 ## Tracked elsewhere (pointers, not duplicated here)
 
 - **ccm-lite eval rigor** — claim-linked provenance (separate span- from
