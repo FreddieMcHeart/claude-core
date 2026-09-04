@@ -197,6 +197,17 @@ DATED_CLAIMS = [
                    "input ($5/$2) and output ($25/$10), permanently — the '~1.7x after' this "
                    "row used to instruct was never going to be true, and a session acting on "
                    "it would have edited correct prose into incorrect prose.",
+        # WHERE each affected file was actually corrected. A `resolved` marker that
+        # does not say this reads as 'all handled' and sends the next reader looking
+        # for nothing — which is the same stale-prose failure this table exists to
+        # catch, recurring inside the record of catching it.
+        "landed_in": "FORCE_LOAD_RULES and skills/models-router/references/"
+                     "main-agent-routing.md are corrected in the same commit as this "
+                     "row. skills/claude-cost-audit/references/pricing.md is NOT — it "
+                     "is corrected on claude-core PR #61, open and unmerged as of "
+                     "2026-09-04, and until that merges the audit table still bills "
+                     "every Sonnet 5 turn dated 2026-09-01 or later at 1.5x its real "
+                     "cost.",
     },
 ]
 
@@ -2478,7 +2489,20 @@ def _claim_status(claim, today):
     never re-graded against the clock, so its `expires` stays as the date that was
     predicted rather than being edited into a lie.
     """
-    if claim.get("resolved"):
+    resolved = claim.get("resolved")
+    if resolved:
+        # An exemption with no stated reason is mute, and mute exemptions accumulate
+        # until the table means nothing. Enforced HERE and not only in a test: this
+        # repo has no CI, so a test-only guard reduces to "a human remembered to run
+        # pytest before merging a new row". Note the failure direction — an
+        # unjustified row is LOUD, not silently exempt, so the cheap way to shut the
+        # advisory up is never to add `resolved` without saying what was checked.
+        try:
+            datetime.fromisoformat(str(resolved)).date()
+        except Exception:
+            return ("unjustified", None)
+        if not (claim.get("source") and claim.get("finding")):
+            return ("unjustified", None)
         return ("resolved", None)
     try:
         expires = datetime.fromisoformat(str(claim.get("expires"))).date()
@@ -2507,7 +2531,7 @@ def dated_claims_context(state, today=None):
         return (None, None)
     today = today or datetime.now(timezone.utc).date()
 
-    expired, due, malformed = [], [], []
+    expired, due, malformed, unjustified, resolved = [], [], [], [], []
     for claim in DATED_CLAIMS:
         status, days = _claim_status(claim, today)
         if status == "expired":
@@ -2516,9 +2540,17 @@ def dated_claims_context(state, today=None):
             due.append((claim, days))
         elif status == "malformed":
             malformed.append(claim)
+        elif status == "unjustified":
+            unjustified.append(claim)
+        elif status == "resolved":
+            resolved.append(claim)
 
-    if not (expired or due or malformed):
-        return (None, "current")
+    if not (expired or due or malformed or unjustified):
+        # 'resolved' rather than 'current' when the silence is caused by rows that
+        # were answered. Both are silent and they are silent for different reasons,
+        # and the only reader of the difference is whoever is later asking why this
+        # advisory never fires. `log_fire` records the outcome; give it the true one.
+        return (None, "resolved" if resolved else "current")
 
     lines = []
     for claim, days in expired:
@@ -2529,7 +2561,16 @@ def dated_claims_context(state, today=None):
         lines.append(f"- **unparseable expiry** `{claim.get('expires')!r}` on "
                      f"{claim.get('what', '<no description>')} — this row is not "
                      f"protecting anything; fix the date.")
-    outcome = "expired" if expired else ("malformed" if malformed else "due")
+    for claim in unjustified:
+        lines.append(f"- **unjustified `resolved`** on "
+                     f"{claim.get('what', '<no description>')} — a row is exempted only "
+                     f"by a re-verification anyone can repeat, so `resolved` needs an ISO "
+                     f"date plus `source` and `finding`. Until then this row is neither "
+                     f"protecting anything nor exempt.")
+    outcome = ("expired" if expired
+               else "malformed" if malformed
+               else "unjustified" if unjustified
+               else "due")
     return (
         "**Dated claim re-validation** — a statement in this repo is at or past its "
         "expiry. Nothing has failed; dated prose decays without raising, which is why "
