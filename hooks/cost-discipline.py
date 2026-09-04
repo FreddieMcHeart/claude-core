@@ -2899,7 +2899,12 @@ def handle_user_prompt_submit(payload):
             if outcome:
                 log_fire(
                     "dated_claim", session_id,
-                    "warn" if outcome in ("expired", "malformed") else "info",
+                    # `unjustified` belongs in the warn set: the whole point of the status is that
+        # an unexplained exemption is louder than a claim that merely came due, and
+        # severity is the channel the sibling advisories use to say so. Without this
+        # the row shouts in the prompt and whispers in the log — which is the half a
+        # reader greps.
+        "warn" if outcome in ("expired", "malformed", "unjustified") else "info",
                     outcome=outcome,
                 )
         except Exception:

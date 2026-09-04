@@ -191,11 +191,33 @@ def test_resolved_must_be_a_date_not_merely_truthy(monkeypatch):
 
 
 def test_an_expired_row_outranks_an_unjustified_one(monkeypatch):
-    """Worst status present must be the reported one, as for malformed."""
-    monkeypatch.setattr(cd, "DATED_CLAIMS",
-                        [_resolved(source=None), _claim("2026-08-31")])
-    _, outcome = cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 1))
+    """Worst status present must be the reported one, as for malformed.
+
+    The first version of this test could not fail. Its second row is one day past
+    its own expiry, so `outcome == "expired"` held no matter how the first row was
+    graded — deleting the source/finding guard entirely left it green, measured
+    2026-09-04. Pin the premise as well as the conclusion: a priority test that
+    does not assert what it is prioritising is asserting nothing.
+    """
+    unjust = _resolved(source=None)
+    assert cd._claim_status(unjust, date(2026, 9, 1)) == ("unjustified", None), (
+        "premise: the first row must really be unjustified, or this tests nothing"
+    )
+    monkeypatch.setattr(cd, "DATED_CLAIMS", [unjust, _claim("2026-08-31")])
+    msg, outcome = cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 1))
     assert outcome == "expired"
+    assert "unjustified `resolved`" in msg, (
+        "the lower-ranked status must still get its own line — the outcome picks one "
+        "label, the message carries every one of them"
+    )
+
+
+def test_an_unjustified_row_outranks_a_due_one(monkeypatch):
+    """The rung of the priority chain that has no independent second cause."""
+    monkeypatch.setattr(cd, "DATED_CLAIMS",
+                        [_resolved(source=None), _claim("2026-09-10")])
+    _, outcome = cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 4))
+    assert outcome == "unjustified"
 
 
 def test_resolved_rows_must_say_who_verified_and_against_what():
