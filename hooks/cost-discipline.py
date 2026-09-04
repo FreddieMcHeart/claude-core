@@ -132,10 +132,10 @@ WIKI_INDEX_CAP = 24       # index files inspected per scan — a bound, and it i
 # in the cloud-auth precedent: knowledge must load before the decision; enforcement only
 # fires on the attempt.
 # The trailing guard is (?![A-Za-z0-9]) rather than \b: `_` is a word character, so \b
-# silently refused `PLAT-3113_notes`, which is how branch names and filenames spell it.
-# The digit bound is 1-9: one digit is a real key (`PLAT-7`), and the earlier 1-6 bound
+# silently refused `ACME-3113_notes`, which is how branch names and filenames spell it.
+# The digit bound is 1-9: one digit is a real key (`ACME-7`), and the earlier 1-6 bound
 # did not TRUNCATE a longer number, it dropped it — every backtrack failed the
-# lookahead, so `PLAT-1234567` produced no key at all. Large Jira instances reach seven.
+# lookahead, so `ACME-1234567` produced no key at all. Large Jira instances reach seven.
 WORKSTREAM_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,9})(?![A-Za-z0-9])")
 # Prefixes that are never ticket keys. This list is an OPTIMISATION, not the filter — the
 # real filter is that a key with no page produces silence, so a novel false positive costs
@@ -1359,7 +1359,7 @@ def _denotes_repo(low, i, j):
       under a foreign root   -> False. `~/.claude/skills/` is a path, and is not
                                 a repo. Excluded BEFORE the path test, or every
                                 harness self-reference counts.
-      a path shape           -> True.  `mama/uncapped/agent`, `helm-charts/`.
+      a path shape           -> True.  `mama/x/agent`, `helm-charts/`.
       a bare word            -> True only if something adjacent says "repo",
                                 "service", "codebase", … or a `.git` follows.
     """
@@ -1412,7 +1412,7 @@ def match_repos(text, repos):
     This used to be a whole-token match: the name anywhere in the prose, with
     hyphen-aware boundaries. That is a proxy for "the user is asking about this
     repository", and the two coincided only while repos were named things like
-    `mondu-infra`. They diverged silently the moment one was named `agent`.
+    `acme-infra`. They diverged silently the moment one was named `agent`.
     Measured on 8,947 real prompts from this machine: the token rule fired on
     2,337 of them — 26.12%, better than one prompt in four — driven by `agent`
     (1417), `skills` (1207), `commands` (604), `hooks` (552), `mcp` (376). Those
@@ -2124,8 +2124,8 @@ def workstream_page_scan(keys, repo=None):
     lowered = [(p, p.lower()) for p in tracked]
     for key in keys:
         kl = re.escape(key.lower())
-        # Bounded on both sides: a bare substring made `PLAT-311` match
-        # `plat-3113-rtbf.md`, so a real key that is a numeric prefix of another real key
+        # Bounded on both sides: a bare substring made `ACME-311` match
+        # `acme-3113-rtbf.md`, so a real key that is a numeric prefix of another real key
         # resolved to the wrong page and the advisory stated it as fact.
         key_re = re.compile(r"(?<![a-z0-9])" + kl + r"(?![a-z0-9])")
         found = sorted(p for p, pl in lowered if key_re.search(pl))
@@ -2289,7 +2289,7 @@ def workstream_page_context(state, prompt):
         consulting `hits`. `if not unopened:` is true in two distinguishable situations —
         the scan found nothing, and the scan found a page that this session had already
         opened — and only the first is what the name says. Reproduced 2026-08-06 by
-        probing the truncated branch: `hits={'PLAT-3113': ['brain/proj/PLAT-3113-...md']}`
+        probing the truncated branch: `hits={'ACME-3113': ['brain/proj/ACME-3113-...md']}`
         while the outcome read `no-page-partial`. A page existed, it was open, and the
         fire log recorded that there was no page.
 

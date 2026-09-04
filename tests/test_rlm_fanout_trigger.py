@@ -85,8 +85,8 @@ def test_harness_own_paths_are_not_repo_mentions():
 # --------------------------------------------------------------------------
 
 def test_mama_paths_still_match():
-    prompt = ("how does auth flow across ~/mama/uncapped/agent and "
-              "~/mama/uncapped/skills?")
+    prompt = ("how does auth flow across ~/mama/x/agent and "
+              "~/mama/x/skills?")
     assert cd.match_repos(prompt, REPOS) == {"agent", "skills"}
 
 

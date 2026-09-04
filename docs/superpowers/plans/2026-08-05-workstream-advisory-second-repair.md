@@ -59,7 +59,7 @@ Add to `tests/test_workstream_page.py`:
 def test_the_outcome_reaches_the_fire_log(live, fired):
     """Nothing asserted that the outcome was logged — the fire log is this check's
     only evidence channel, and ROADMAP.md calls it the one instrument we trust."""
-    cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "work on PLAT-3113"})
+    cd.handle_user_prompt_submit({"session_id": "s1", "prompt": "work on ACME-3113"})
     assert ("workstream_page", "unopened") in fired
 ```
 
@@ -156,8 +156,8 @@ def test_settled_keys_do_not_consume_the_per_prompt_bound(live):
     session, because the bound was applied before the settled-filter."""
     st = _state(workstream_keys_fired=["AAA-11", "BBB-22", "CCC-33"])
     keys, truncated = cd.workstream_keys(
-        "AAA-11 BBB-22 CCC-33 PLAT-3113", exclude=st["workstream_keys_fired"])
-    assert keys == ["PLAT-3113"]
+        "AAA-11 BBB-22 CCC-33 ACME-3113", exclude=st["workstream_keys_fired"])
+    assert keys == ["ACME-3113"]
     assert truncated == 0
 ```
 
@@ -233,18 +233,18 @@ t = pathlib.Path(tempfile.mkdtemp()); repo = t / "w"; (repo / "b").mkdir(parents
 subprocess.run(["git", "init", "-q", str(repo)], check=True)
 for k, v in (("user.email", "t@t"), ("user.name", "t")):
     subprocess.run(["git", "-C", str(repo), "config", k, v], check=True)
-(repo / "b" / "PLAT-3116-real.md").write_text("x")
+(repo / "b" / "ACME-3116-real.md").write_text("x")
 subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
 subprocess.run(["git", "-C", str(repo), "commit", "-qm", "x"], check=True, capture_output=True)
 cd.WIKI_DIR = repo; cd._WIKI_PATH = str(repo)
 sd = t / "st"; sd.mkdir(); cd.state_path = lambda sid: sd / f"{sid}.json"
 st = cd.new_state("s1")
-p = "handle PLAT-3113, PLAT-3114, PLAT-3115 and PLAT-3116"
+p = "handle ACME-3113, ACME-3114, ACME-3115 and ACME-3116"
 print("prompt 1 ->", cd.workstream_page_context(st, p)[1])
 print("prompt 2 ->", cd.workstream_page_context(st, p)[1])
 PY
 ```
-Expected: prompt 2 now returns `unopened` and names `b/PLAT-3116-real.md`, where it previously returned `already-advised`.
+Expected: prompt 2 now returns `unopened` and names `b/ACME-3116-real.md`, where it previously returned `already-advised`.
 
 - [ ] **Step 7: Commit**
 
@@ -369,10 +369,10 @@ def test_an_incomplete_scan_is_not_reported_as_no_page(live, monkeypatch):
     session. An absence claim over a population the code knows it did not enumerate."""
     monkeypatch.setattr(cd, "WIKI_INDEX_CAP", 0)
     st = _state()
-    msg, outcome = cd.workstream_page_context(st, "INE-857")
+    msg, outcome = cd.workstream_page_context(st, "XYZ-857")
     assert outcome == "no-page-partial"
     assert msg is None
-    assert "INE-857" not in st["workstream_keys_fired"], "an incomplete scan must not settle"
+    assert "XYZ-857" not in st["workstream_keys_fired"], "an incomplete scan must not settle"
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -661,15 +661,15 @@ git commit -m "fix(hook): an ambiguous bare stem resolves to nothing, not to a c
 ```python
 def test_a_seven_digit_issue_number_is_not_dropped():
     """`\\d{1,6}` plus a lookahead rejecting alnum meant every backtrack failed on a
-    7-digit number, so PLAT-1234567 was dropped ENTIRELY rather than truncated. Large
+    7-digit number, so ACME-1234567 was dropped ENTIRELY rather than truncated. Large
     Jira instances reach seven digits; that is loss of a real key."""
-    assert cd.workstream_keys("close PLAT-1234567")[0] == ["PLAT-1234567"]
+    assert cd.workstream_keys("close ACME-1234567")[0] == ["ACME-1234567"]
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `python3 -m pytest tests/test_workstream_page.py::test_a_seven_digit_issue_number_is_not_dropped -v`
-Expected: FAIL — `[] != ["PLAT-1234567"]`.
+Expected: FAIL — `[] != ["ACME-1234567"]`.
 
 - [ ] **Step 3: Widen the digit bound**
 
@@ -677,10 +677,10 @@ In `hooks/cost-discipline.py`, replace the regex and extend its comment:
 
 ```python
 # The trailing guard is (?![A-Za-z0-9]) rather than \b: `_` is a word character, so \b
-# silently refused `PLAT-3113_notes`, which is how branch names and filenames spell it.
-# The digit bound is 1-9: one digit is a real key (`PLAT-7`), and the earlier 1-6 bound
+# silently refused `ACME-3113_notes`, which is how branch names and filenames spell it.
+# The digit bound is 1-9: one digit is a real key (`ACME-7`), and the earlier 1-6 bound
 # did not TRUNCATE a longer number, it dropped it — every backtrack failed the
-# lookahead, so `PLAT-1234567` produced no key at all. Large Jira instances reach seven.
+# lookahead, so `ACME-1234567` produced no key at all. Large Jira instances reach seven.
 WORKSTREAM_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,9})(?![A-Za-z0-9])")
 ```
 
@@ -949,7 +949,7 @@ def test_compaction_clears_context_derived_workstream_state(live):
     context" and reset none of these three. After a compaction the page content is
     gone, so "this session opened it" is false — leaving it is over-crediting."""
     st = _state(wiki_paths_read=["brain/proj/a.md"],
-                workstream_keys_fired=["PLAT-3113"],
+                workstream_keys_fired=["ACME-3113"],
                 workstream_scans=7,
                 wiki_read_count=9)
     cd.save_state(st)

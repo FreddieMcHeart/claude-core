@@ -1036,7 +1036,7 @@ follow-ups on this machine, and a second index would be a second place to forget
 
 ### Add an ELK layout stage to `engineer-design-diagram`, before the connector
 
-Filed 2026-08-14 from `Uncapped-Main`, out of a real case. Not urgent and not gated — pick up
+Filed 2026-08-14 from a peer session, out of a real case. Not urgent and not gated — pick up
 on request, like everything else here. **Every figure below is the filer's, measured by them
 and not re-derived.** The proposal does not depend on any of them being exact, but anyone
 acting on the numbers should re-check them first.
