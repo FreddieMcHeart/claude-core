@@ -1412,7 +1412,7 @@ def match_repos(text, repos):
     This used to be a whole-token match: the name anywhere in the prose, with
     hyphen-aware boundaries. That is a proxy for "the user is asking about this
     repository", and the two coincided only while repos were named things like
-    `mondu-infra`. They diverged silently the moment one was named `agent`.
+    `acme-infra`. They diverged silently the moment one was named `agent`.
     Measured on 8,947 real prompts from this machine: the token rule fired on
     2,337 of them — 26.12%, better than one prompt in four — driven by `agent`
     (1417), `skills` (1207), `commands` (604), `hooks` (552), `mcp` (376). Those
