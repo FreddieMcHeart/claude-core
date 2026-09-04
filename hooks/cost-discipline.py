@@ -181,12 +181,22 @@ DATED_CLAIM_LEAD_DAYS = 14   # start nudging this far ahead, so the fix can land
 DATED_CLAIMS = [
     {
         "expires": "2026-08-31",
-        "what": "Sonnet 5 introductory rate ($2/$10 per MTok) — list rate $3/$15 applies from 2026-09-01",
-        "recheck": "confirm Anthropic actually moved to list price, then re-check every "
-                   "Opus:Sonnet ratio stated as prose: FORCE_LOAD_RULES in this file and "
-                   "skills/models-router/references/main-agent-routing.md (~2.5x becomes ~1.7x). "
-                   "The dated rows in skills/claude-cost-audit/references/pricing.md already "
-                   "price per-turn correctly and need confirmation, not editing.",
+        "what": "Sonnet 5 introductory rate ($2/$10 per MTok), announced at launch as running "
+                "through 2026-08-31 with a scheduled increase to $3/$15 from 2026-09-01",
+        "recheck": "confirm against the pricing page whether the increase actually happened, "
+                   "then re-check every Opus:Sonnet ratio stated as prose: FORCE_LOAD_RULES in "
+                   "this file and skills/models-router/references/main-agent-routing.md.",
+        # --- re-verified, and the prediction was WRONG. Kept rather than deleted: the row
+        # and its outcome are worth more together than the row is on its own.
+        "resolved": "2026-09-04",
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "finding": "The increase was CANCELLED, not merely late. The page states that the "
+                   "$2/$10 pricing 'announced at launch as introductory pricing through "
+                   "August 31, 2026, is now the standard price' and that the scheduled "
+                   "increase 'will not occur'. So Opus:Sonnet stays exactly 2.5x on both "
+                   "input ($5/$2) and output ($25/$10), permanently — the '~1.7x after' this "
+                   "row used to instruct was never going to be true, and a session acting on "
+                   "it would have edited correct prose into incorrect prose.",
     },
 ]
 
@@ -240,7 +250,7 @@ MECH_BASH_ESCALATION = 8
 
 FORCE_LOAD_RULES = """**Cost discipline reminder (auto-loaded each session):**
 
-- Default session main is now **Opus 5** {{EFFORT}} at $5/$25 per MTok — same rate as Opus 4.8, so the 4.8→5 move is cost-neutral per token. Opus ≈ **2.5× Sonnet 5** per token today, ~1.7× once Sonnet 5's intro rate ends **2026-08-31** — switch to `/model sonnet` for routine/mechanical phases; reserve Opus for architecture, cross-repo synthesis, root-cause. Delegation discipline pays most on an Opus main.
+- Default session main is now **Opus 5** {{EFFORT}} at $5/$25 per MTok — same rate as Opus 4.8, so the 4.8→5 move is cost-neutral per token. Opus is **2.5× Sonnet 5** per token — $5/$25 against $2/$10, with no expiry date: the $2/$10 was announced as introductory through 2026-08-31 and the scheduled increase to $3/$15 was cancelled (re-verified 2026-09-04). Switch to `/model sonnet` for routine/mechanical phases; reserve Opus for architecture, cross-repo synthesis, root-cause. Delegation discipline pays most on an Opus main.
 - Effort: `ultrathink` in a prompt is an in-context nudge only — it does NOT raise the effort level. For a bigger reasoning budget use `/effort high|xhigh`. Hooks cannot change effort.
 - After **15 inline mechanical reads** (Bash/Read/Grep/Glob) → next read goes to a Haiku scout. Hook will warn at 15.
 - After **4 consecutive read-only calls** → delegate or write something concrete. Hook will warn.
@@ -2450,13 +2460,26 @@ def workstream_page_context(state, prompt):
 
 
 def _claim_status(claim, today):
-    """('expired'|'due'|'current'|'malformed', days) for one dated claim.
+    """('resolved'|'expired'|'due'|'current'|'malformed', days) for one dated claim.
 
     A malformed or missing `expires` returns 'malformed' rather than being
     skipped. Skipping is the tempting default and it is unknown -> permissive: a
     typo in a date silently retires the trigger, and the row still LOOKS like
     coverage while covering nothing.
+
+    `resolved` is the opposite direction and it is why this branch exists at all.
+    Without it the only way to stop a re-verified claim from firing is to DELETE
+    the row -- which throws away the one thing the exercise produced, namely what
+    the answer turned out to be. A dated row is a PREDICTION STORED AS DATA; when
+    the prediction is wrong, the record of it being wrong is the valuable half.
+    Measured 2026-09-04: the Sonnet 5 row kept firing for four days after its own
+    re-check had been done and answered, because nothing could write the answer
+    back. `resolved` is that write-back. A resolved row never fires again and is
+    never re-graded against the clock, so its `expires` stays as the date that was
+    predicted rather than being edited into a lie.
     """
+    if claim.get("resolved"):
+        return ("resolved", None)
     try:
         expires = datetime.fromisoformat(str(claim.get("expires"))).date()
     except Exception:

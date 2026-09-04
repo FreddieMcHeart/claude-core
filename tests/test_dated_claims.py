@@ -105,6 +105,82 @@ def test_sonnet_intro_rate_claim_is_present():
                for c in cd.DATED_CLAIMS)
 
 
+# ---------------- a re-verified claim: the write-back ----------------
+
+def _resolved(expires="2026-08-31", **over):
+    claim = {
+        "expires": expires,
+        "what": "a test claim",
+        "recheck": "do the thing",
+        "resolved": "2026-09-04",
+        "source": "https://example.invalid/pricing",
+        "finding": "the predicted change did not happen",
+    }
+    claim.update(over)
+    return claim
+
+
+def test_resolved_claim_never_fires(monkeypatch):
+    """The whole point: a claim whose re-check has been DONE stops nagging.
+
+    Before `resolved` existed, the only way to silence a re-verified row was to
+    delete it — which discards the answer the re-check produced. Measured
+    2026-09-04: the shipped Sonnet 5 row kept firing for four days after it had
+    been answered, because nothing could write the answer back.
+    """
+    monkeypatch.setattr(cd, "DATED_CLAIMS", [_resolved()])
+    assert cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 12, 31)) == (None, "current")
+
+
+def test_resolved_outranks_a_long_past_expiry(monkeypatch):
+    """`resolved` is checked BEFORE the clock, so no expiry can revive the row."""
+    status, days = cd._claim_status(_resolved(expires="2020-01-01"), date(2026, 9, 4))
+    assert status == "resolved"
+    assert days is None
+
+
+def test_an_unresolved_row_beside_a_resolved_one_still_fires(monkeypatch):
+    """Resolving one row must not mute the table."""
+    monkeypatch.setattr(cd, "DATED_CLAIMS", [_resolved(), _claim("2026-08-31")])
+    msg, outcome = cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 1))
+    assert outcome == "expired"
+    assert "EXPIRED 1d ago" in msg
+    assert msg.count("EXPIRED") == 1, "the resolved row must contribute no line"
+
+
+def test_resolved_rows_must_say_who_verified_and_against_what():
+    """A resolved row is an EXEMPTION, and an exemption with no stated reason is
+    mute. Without this, `resolved: true` becomes a silent kill switch that reads
+    identically to a claim nobody ever checked."""
+    for claim in cd.DATED_CLAIMS:
+        if not claim.get("resolved"):
+            continue
+        assert claim.get("source"), f"resolved row with no source: {claim!r}"
+        assert claim.get("finding"), f"resolved row with no finding: {claim!r}"
+        assert str(claim["source"]).startswith("http"), (
+            f"a resolved row's source must be fetchable, not a description: {claim!r}"
+        )
+
+
+def test_resolved_rows_still_carry_a_parseable_expiry():
+    """The hole this branch opens, closed deliberately.
+
+    `resolved` short-circuits BEFORE `expires` is parsed, so a typo in a resolved
+    row's date can no longer be caught as 'malformed' — the exact failure
+    test_malformed_expiry_is_surfaced_not_skipped exists to prevent, walked back
+    in through the new door. The date is kept as the prediction that was made, so
+    it still has to be a date.
+    """
+    for claim in cd.DATED_CLAIMS:
+        if not claim.get("resolved"):
+            continue
+        assert cd._claim_status({k: v for k, v in claim.items() if k != "resolved"},
+                                date(2026, 7, 27))[0] != "malformed", (
+            f"resolved row has an unparseable expiry: {claim!r}"
+        )
+        date.fromisoformat(str(claim["resolved"]))
+
+
 # ---------------- throttle + handler wiring ----------------
 
 def test_throttled_off_interval(monkeypatch):
