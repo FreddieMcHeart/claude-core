@@ -1359,7 +1359,7 @@ def _denotes_repo(low, i, j):
       under a foreign root   -> False. `~/.claude/skills/` is a path, and is not
                                 a repo. Excluded BEFORE the path test, or every
                                 harness self-reference counts.
-      a path shape           -> True.  `mama/uncapped/agent`, `helm-charts/`.
+      a path shape           -> True.  `mama/x/agent`, `helm-charts/`.
       a bare word            -> True only if something adjacent says "repo",
                                 "service", "codebase", … or a `.git` follows.
     """
