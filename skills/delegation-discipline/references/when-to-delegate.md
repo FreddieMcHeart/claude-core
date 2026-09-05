@@ -52,7 +52,7 @@ These are below the break-even, or need raw text in main:
 - Short configs / files (<50 lines). Inline.
 - Interactive iteration where seeing raw output matters. Inline.
 - **Symbol-shaped lookup** (where is X defined / who calls X / what implements X) in Go/Ruby/Python/TS/Terraform → use the native LSP tool (`goToDefinition` / `findReferences` / `incomingCalls`) BEFORE dispatching any scout or running a Grep+Read chain — a ~100-token exact result beats a ~20k-token Haiku dispatch and a multi-file grep. Fall back to Grep only when no server is configured for the file type.
-  Calibration (measured 2026-06-11, 6 languages, real Mondu files):
+  Calibration (measured 2026-06-11, 6 languages, real production files):
   - **The saving scales with the question, not the file**: single-file overview 2–6×; cross-file reference tracing ~26× (grep cascade ≈ 11k tok vs findReferences ≈ 430 tok); whole-module orientation is impossible→possible (risk-engine = ~25M tok, no context fits it).
   - **Skip LSP for files under ~1KB** — just Read them; the symbol tree can be BIGGER than the file (measured on a 539B workflow YAML: 0.6×, LSP lost).
   - **Skip LSP for declaration-dense files** (config structs, env specs) — when nearly every line IS a declaration, the symbol list ≈ half the file (spec.go: only 2.1×); Read may serve better since you likely need the tags/values anyway.

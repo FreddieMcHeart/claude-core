@@ -135,7 +135,7 @@ def test_per_session_rows_sorted_by_tokens_and_capped():
 
 def test_format_report_smoke_and_hidden_note():
     ledgers = [
-        _led("active", "2026-07-19", by_tool={"mcp__uncapped_notion__notion_fetch": {"chars": 50, "tokens": 14}}),
+        _led("active", "2026-07-19", by_tool={"mcp__acme_notion__notion_fetch": {"chars": 50, "tokens": 14}}),
         _led("empty", "2026-07-18", metered=0, chars=0),
     ]
     out = rpt.format_report(ledgers)

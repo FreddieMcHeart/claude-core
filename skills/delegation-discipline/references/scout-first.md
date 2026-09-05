@@ -13,7 +13,7 @@ Before any Sonnet or Opus agent dispatch, apply the **scout-first pattern**. A S
 
 Every `Agent` dispatch MUST include these in the prompt, in this order:
 
-- **Specific repo + directory** — not "our codebase," but `mama/mondu/platform` or `mama/mondu/docs/platform/services/`.
+- **Specific repo + directory** — not "our codebase," but `mama/x/platform` or `mama/x/docs/platform/services/`.
 - **`Start here:` file paths** — the scout's findings or the wiki's paths. If you can't produce these, you haven't scouted yet.
 - **Expected deliverable in one sentence** — "Report the 3 Kafka topics this service publishes and their schemas."
 - **Word cap** — match the cap to the scout shape:
@@ -45,7 +45,7 @@ Prompt: "Find how our authentication webhooks work."
 Good dispatch:
 ```
 Step 1 (main, free): grep docs/platform/services for auth → finds docs/platform/services/auth.md, docs/platform/services/webhook-gateway.md.
-Step 2 (Haiku, 20k): file-finder "find webhook-related handler files in mama/mondu/platform" → returns 4 file paths.
+Step 2 (Haiku, 20k): file-finder "find webhook-related handler files in mama/x/platform" → returns 4 file paths.
 Step 3 (Sonnet, 30k): Explore agent with prompt: "Starting from docs/platform/services/auth.md, docs/platform/services/webhook-gateway.md, and these handler files [paths], summarize the auth webhook flow end-to-end. Report in under 200 words."
 ```
 → agent uses all 30k on synthesis, returns a tight 180-word summary.
