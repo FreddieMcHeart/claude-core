@@ -203,11 +203,12 @@ DATED_CLAIMS = [
         # catch, recurring inside the record of catching it.
         "landed_in": "FORCE_LOAD_RULES and skills/models-router/references/"
                      "main-agent-routing.md are corrected in the same commit as this "
-                     "row. skills/claude-cost-audit/references/pricing.md is NOT — it "
-                     "is corrected on claude-core PR #61, open and unmerged as of "
-                     "2026-09-04, and until that merges the audit table still bills "
-                     "every Sonnet 5 turn dated 2026-09-01 or later at 1.5x its real "
-                     "cost.",
+                     "row. skills/claude-cost-audit/references/pricing.md was corrected "
+                     "separately and is on main as of 2026-09-05 (PR #61): the dated "
+                     "split is gone and Sonnet 5 is one flat $2/$10 row. Verified by "
+                     "reading the file at origin/main, not by the merge receipt — the "
+                     "table it fixes had been over-billing every Sonnet 5 turn dated "
+                     "2026-09-01 or later by 50% for four days.",
     },
 ]
 
