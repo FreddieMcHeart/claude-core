@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.16.2 (2026-09-07)
+
+### Bug Fixes
+
+- **hook**: Key the plugin-drift pulse on what the gap contains, not how big it is
+  ([#64](https://github.com/FreddieMcHeart/claude-core/pull/64),
+  [`ffa3655`](https://github.com/FreddieMcHeart/claude-core/commit/ffa3655d69d383957245d6e026d9790ec3e3b933))
+
+### Testing
+
+- **hook**: Assert on content where the outcome enum could not tell the versions apart
+  ([#64](https://github.com/FreddieMcHeart/claude-core/pull/64),
+  [`ffa3655`](https://github.com/FreddieMcHeart/claude-core/commit/ffa3655d69d383957245d6e026d9790ec3e3b933))
+
+
 ## v0.16.1 (2026-09-07)
 
 ### Bug Fixes
