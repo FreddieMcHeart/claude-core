@@ -3071,6 +3071,33 @@ def handle_user_prompt_submit(payload):
     sys.stdout.flush()
 
 
+def _dispatch_key(value, fallback):
+    """A dict key taken from `tool_input`, forced to something hashable.
+
+    `tool_input` is not schema-checked before it reaches this hook. A list or a
+    dict arriving as `model` or `subagent_type` is TRUTHY, so it slips past every
+    `if not tool_input.get(...)` guard and lands as a dict key, where `.get()`
+    raises `TypeError: unhashable type`. Reproduced by execution 2026-09-07 for
+    both fields; found by independent review, not by the test suite.
+
+    The failure is silent rather than loud: `main()` catches the exception and
+    exits 0, so the dispatch proceeds and only the bookkeeping for that call is
+    lost — including every counter after the raise.
+
+    A non-string value is STRINGIFIED rather than folded into the fallback, so a
+    malformed dispatch looks malformed on the status line instead of hiding among
+    the legitimate ones. Truncated because the key is displayed and an unbounded
+    one would wrap the bar. `None` and `""` take the fallback: `str(None)` would
+    put the word "None" on screen, which reads as a model named None rather than
+    as an absent field.
+    """
+    if isinstance(value, str):
+        return value or fallback
+    if value is None:
+        return fallback
+    return str(value)[:64]
+
+
 def handle_pre_tool(payload):
     session_id = payload.get("session_id")
     tool_name = payload.get("tool_name", "")
@@ -3663,9 +3690,41 @@ def handle_pre_tool(payload):
         # counter: that is the ratchet defect the read-block tier was fixed for, where
         # a counter measured work that never happened. Keyed by subagent_type because
         # the question is "delegated downward to WHAT", not "how many times".
-        _d_type = tool_input.get("subagent_type") or "unknown"
+        _d_type = _dispatch_key(tool_input.get("subagent_type"), "unknown")
         _d_by_type = state.setdefault("dispatches_by_type", {})
         _d_by_type[_d_type] = _d_by_type.get(_d_type, 0) + 1
+
+        # The model, recorded for the status line — which has no other source for
+        # it. The session header and the HUD identity row both show the SESSION's
+        # model, the running-agent line carries no model field at all, and a
+        # sub-agent's turns are not written to the dispatcher's transcript, so
+        # nothing downstream can derive this. Measured 2026-09-07 on a live
+        # session: five running sub-agents, zero `isSidechain` turns in the
+        # dispatcher's own file.
+        #
+        # THE EFFECTIVE MODEL, NOT THE PARAMETER. A dispatch reaching this line
+        # without `model:` was allowed because its agent file declares one, so
+        # reading only tool_input would publish a blank for every reader agent —
+        # 20 of 152 real dispatches on the day this was written — and a blank
+        # reads as "no model set" for an agent whose model is set, just set
+        # elsewhere.
+        #
+        # `unspecified` should be unreachable: the block above returns on the one
+        # path with no answer. It is a visible sentinel rather than an omission
+        # precisely so that being wrong about that shows up on screen instead of
+        # as a missing row.
+        #
+        # This is what was ASKED FOR, not what ran. The executing model lives in
+        # the sub-agent's own task-output file and a PreToolUse hook cannot see
+        # it; the field is named for what it holds.
+        _d_model = _dispatch_key(
+            tool_input.get("model")
+            or (state.get("agent_models") or {}).get(_d_type)
+            or "unspecified",
+            "unspecified")
+        _d_by_model = state.setdefault("dispatches_by_model", {})
+        _d_by_model[_d_model] = _d_by_model.get(_d_model, 0) + 1
+        state["last_dispatch"] = {"subagent_type": _d_type, "model": _d_model}
         save_state(state)
 
     # ---------- Workflow governance (warn + log only; design 2026-06-02) ----------
