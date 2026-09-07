@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.17.0 (2026-09-07)
+
+### Bug Fixes
+
+- **hook**: A non-string model or subagent_type crashed the dispatch counters
+  ([#65](https://github.com/FreddieMcHeart/claude-core/pull/65),
+  [`fa2ad00`](https://github.com/FreddieMcHeart/claude-core/commit/fa2ad000ea8477074344d05b0eaa49c0cc24fcf2))
+
+### Features
+
+- **hook**: Record the dispatched model so the status line can show it
+  ([#65](https://github.com/FreddieMcHeart/claude-core/pull/65),
+  [`fa2ad00`](https://github.com/FreddieMcHeart/claude-core/commit/fa2ad000ea8477074344d05b0eaa49c0cc24fcf2))
+
+
 ## v0.16.2 (2026-09-07)
 
 ### Bug Fixes
