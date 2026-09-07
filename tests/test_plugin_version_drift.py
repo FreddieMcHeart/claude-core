@@ -52,6 +52,22 @@ def _commit_plugin_json(repo, version):
     return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
+def _commit_file(repo, rel_path, body="x\n"):
+    """Commit one file at `rel_path` WITHOUT touching plugin.json.
+
+    `_commit_plugin_json` above cannot be reused for the shipped-vs-not tests:
+    it rewrites `.claude-plugin/plugin.json`, which is itself a shipped path,
+    so every commit it makes would classify as shipped drift and the two
+    branches under test would be indistinguishable.
+    """
+    target = repo / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(body)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", f"touch {rel_path}")
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
 def _installed_plugins_file(tmp_path, key, entries):
     """Real on-disk shape: {"version": 2, "plugins": {"name@market": [...]}} —
     NOT the "name@market" keys at the top level. Getting this fixture wrong
@@ -327,3 +343,125 @@ def test_advisory_names_the_states_it_compared_not_the_running_process(tmp_path,
     monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", registry)
     msg, _ = cd.plugin_version_drift_context(_prompt())
     assert "restart" in msg.lower()
+
+
+# ---------------- what the gap CONTAINS, not how many commits it is ----------------
+#
+# The defect these guard: the detector counted commits while its printed remedy
+# compared version strings. Under conventional commits a `docs:` or `chore:`
+# run moves the sha and never moves the version, so the pulse could report a
+# gap forever while `claude plugin update` correctly answered "already at the
+# latest version". Neither side was malfunctioning; they measured different
+# quantities. Fleet #64.
+
+
+def _drift_setup(tmp_path, monkeypatch, second_commit, installed_version="1.0.0"):
+    """Repo at 1.0.0, then one more commit made by `second_commit(repo)`.
+    The install record pins the FIRST commit, so the gap is exactly that
+    second commit and nothing else."""
+    repo = _repo(tmp_path)
+    base_sha = _commit_plugin_json(repo, "1.0.0")
+    second_commit(repo)
+    installed = _installed_plugins_file(
+        tmp_path, KEY, [{"version": installed_version, "gitCommitSha": base_sha}])
+    registry = _registry_file(tmp_path, "test-marketplace", repo)
+    monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", installed)
+    monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", registry)
+    return repo
+
+
+def test_a_gap_touching_no_shipped_path_does_not_fire(tmp_path, monkeypatch):
+    """The live case on this machine: three commits of drift, all `docs:`/`chore:`,
+    zero executable paths. The installed plugin BEHAVES identically to the repo.
+    Firing here trains every session to read the advisory as noise, and a noisy
+    channel is tuned out wholesale — taking the one real item with it."""
+    _drift_setup(tmp_path, monkeypatch,
+                 lambda r: _commit_file(r, "docs/roadmap.md", "# notes\n"))
+    assert cd.plugin_version_drift_context(_prompt()) == (None, "docs_only")
+
+
+def test_a_gap_touching_a_shipped_path_still_fires(tmp_path, monkeypatch):
+    _drift_setup(tmp_path, monkeypatch,
+                 lambda r: _commit_file(r, "hooks/cost-discipline.py", "print(1)\n"))
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "hooks/cost-discipline.py" in msg, "must name what actually drifted"
+
+
+def test_an_unrecognised_path_counts_as_shipped(tmp_path, monkeypatch):
+    """The classification is a DENYLIST of documentation/CI paths, not an
+    allowlist of shipped ones, and the direction is the whole design. A new
+    top-level directory added later is unknown to this code; treating the
+    unknown as shipped makes it fire, treating it as docs would make the pulse
+    go silent on real drift the day someone adds a directory.
+
+    It asserts on the message CONTENT, not on the outcome enum alone. The enum
+    version of this test passed against the pre-change code too — verified by
+    running it against `origin/main`'s hook — because that code fired on any sha
+    mismatch regardless of path. Naming the path is what makes the assertion
+    about the classification rather than about the mismatch.
+    """
+    _drift_setup(tmp_path, monkeypatch,
+                 lambda r: _commit_file(r, "brandnew/thing.py", "print(1)\n"))
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "brandnew/thing.py" in msg
+
+
+def test_a_gap_it_cannot_classify_fires_rather_than_going_silent(tmp_path, monkeypatch):
+    """installed sha is not in this repo's history, so no diff can be taken.
+    An unanswerable question is not a negative answer.
+
+    This one CANNOT be strengthened into a regression control, and saying so is
+    better than leaving a reader to assume it is one. An unclassifiable gap has
+    no path list to assert on — that is the whole point of it — so the message
+    is byte-identical in shape to what the pre-change code produced, and this
+    test passes against `origin/main`'s hook (verified by running it there). It
+    is a specification test: it pins the direction, so that a later edit
+    collapsing `None` into `[]` flips the outcome to `docs_only` and fails here.
+    """
+    repo = _repo(tmp_path)
+    _commit_plugin_json(repo, "1.0.0")
+    installed = _installed_plugins_file(
+        tmp_path, KEY, [{"version": "1.0.0", "gitCommitSha": "f" * 40}])
+    registry = _registry_file(tmp_path, "test-marketplace", repo)
+    monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", installed)
+    monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", registry)
+    assert cd.plugin_version_drift_context(_prompt())[1] == "drifted"
+
+
+# ---------------- the remedy must be able to work ----------------
+
+def test_equal_versions_do_not_print_a_command_that_cannot_act(tmp_path, monkeypatch):
+    """Shipped code drifted, but both sides read the same version string —
+    reachable via `refactor:`/`chore:`, which touch executable paths and do not
+    bump the version. `claude plugin update` compares version strings and will
+    answer "already at the latest version", writing nothing. Printing it here
+    is the remedy-inside-the-trap: the diagnosis is right and the one
+    actionable line is a no-op, which teaches the reader to distrust the
+    diagnosis."""
+    _drift_setup(tmp_path, monkeypatch,
+                 lambda r: _commit_file(r, "skills/x/SKILL.md", "---\n"),
+                 installed_version="1.0.0")
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "claude plugin update" not in msg
+    assert "same version" in msg.lower(), "must say WHY the updater is not offered"
+    assert "skills/x/SKILL.md" in msg
+
+
+def test_differing_versions_still_print_the_updater_command(tmp_path, monkeypatch):
+    """The other branch, kept as a control: when the version really has moved
+    the updater works, and withholding it would be the opposite failure."""
+    repo = _repo(tmp_path)
+    base_sha = _commit_plugin_json(repo, "1.0.0")
+    _commit_file(repo, "hooks/x.py", "print(1)\n")
+    _commit_plugin_json(repo, "1.0.1")
+    installed = _installed_plugins_file(
+        tmp_path, KEY, [{"version": "1.0.0", "gitCommitSha": base_sha}])
+    registry = _registry_file(tmp_path, "test-marketplace", repo)
+    monkeypatch.setattr(cd, "INSTALLED_PLUGINS_FILE", installed)
+    monkeypatch.setattr(cd, "KNOWN_MARKETPLACES_FILE", registry)
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert f"`claude plugin update {KEY}`" in msg
