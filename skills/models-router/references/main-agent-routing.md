@@ -106,7 +106,7 @@ Per *attempt* Opus @ `medium` was slightly **cheaper**. Its one failure was `API
 
 Practical consequence for this file: Sonnet-first still stands, now on a 4/4-vs-3/4 success reading rather than on a cost gap — and the cost gap between these two routes on real sessions is, at n=4, not measurable.
 
-**This margin has an expiry date.** At Sonnet 5's list rate (from 2026-09-01) the same measured token counts give $7.38 versus $9.31 — still cheaper, but 1.26× rather than 1.89×. A dated claim in `hooks/cost-discipline.py` (`DATED_CLAIMS`) fires ahead of that boundary.
+**That margin has no expiry date — and this line used to say it did.** The $2/$10 rate was announced as introductory through 2026-08-31 with a scheduled increase to $3/$15, so this paragraph priced the same measured token counts at $7.38 versus $9.31 from 2026-09-01, i.e. 1.26× rather than 1.89×. **The increase was cancelled.** Re-verified 2026-09-04 against `https://platform.claude.com/docs/en/about-claude/pricing`, which now calls $2/$10 the standard price and says the increase "will not occur". So the 1.89× stands and the $7.38 figure prices a rate that was never charged. The `DATED_CLAIMS` row in `hooks/cost-discipline.py` that fired ahead of that boundary is now marked `resolved` rather than deleted, so the prediction and its outcome stay in one place.
 
 **What this does NOT establish.** Four limits, each of which would change the answer:
 - **Pass rate saturated at 15/15**, so the experiment has a ceiling effect and detects no quality difference. The finding is "equal cost-effectiveness at equal *perfect* success on an easy task class", not "equal capability".

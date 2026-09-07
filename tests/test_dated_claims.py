@@ -92,7 +92,13 @@ def test_every_shipped_claim_is_well_formed():
     re-check instruction is dead weight that reads as coverage."""
     assert cd.DATED_CLAIMS, "the table must not be empty — it is the whole feature"
     for claim in cd.DATED_CLAIMS:
-        status, _ = cd._claim_status(claim, date(2026, 7, 27))
+        # `resolved` short-circuits BEFORE the date is parsed, so calling _claim_status
+        # on the row as-is cannot reach the malformed branch and this assertion would be
+        # vacuous for every resolved row — reproduced 2026-09-04 by breaking the shipped
+        # row's date and watching this test stay green. Strip the marker so the check
+        # means what it says.
+        gradeable = {k: v for k, v in claim.items() if k != "resolved"}
+        status, _ = cd._claim_status(gradeable, date(2026, 7, 27))
         assert status != "malformed", f"unparseable expiry in shipped row: {claim!r}"
         assert claim.get("what"), f"shipped row has no description: {claim!r}"
         assert claim.get("recheck"), f"shipped row has no re-check instruction: {claim!r}"
@@ -103,6 +109,148 @@ def test_sonnet_intro_rate_claim_is_present():
     drops the row fails loudly instead of silently removing the only trigger."""
     assert any("2026-08-31" == c.get("expires") and "Sonnet 5" in c.get("what", "")
                for c in cd.DATED_CLAIMS)
+
+
+# ---------------- a re-verified claim: the write-back ----------------
+
+def _resolved(expires="2026-08-31", **over):
+    claim = {
+        "expires": expires,
+        "what": "a test claim",
+        "recheck": "do the thing",
+        "resolved": "2026-09-04",
+        "source": "https://example.invalid/pricing",
+        "finding": "the predicted change did not happen",
+    }
+    claim.update(over)
+    return claim
+
+
+def test_resolved_claim_never_fires(monkeypatch):
+    """The whole point: a claim whose re-check has been DONE stops nagging.
+
+    Before `resolved` existed, the only way to silence a re-verified row was to
+    delete it — which discards the answer the re-check produced. Measured
+    2026-09-04: the shipped Sonnet 5 row kept firing for four days after it had
+    been answered, because nothing could write the answer back.
+    """
+    monkeypatch.setattr(cd, "DATED_CLAIMS", [_resolved()])
+    # 'resolved', not 'current': both are silent and they are silent for different
+    # reasons, and the outcome is what `log_fire` records for whoever later asks why
+    # this advisory never fires.
+    assert cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 12, 31)) == (None, "resolved")
+
+
+def test_a_current_table_is_still_reported_as_current(monkeypatch):
+    """The control for the test above — silence from a not-yet-due row keeps its own name."""
+    monkeypatch.setattr(cd, "DATED_CLAIMS", [_claim("2099-01-01")])
+    assert cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 4)) == (None, "current")
+
+
+def test_resolved_outranks_a_long_past_expiry(monkeypatch):
+    """`resolved` is checked BEFORE the clock, so no expiry can revive the row."""
+    status, days = cd._claim_status(_resolved(expires="2020-01-01"), date(2026, 9, 4))
+    assert status == "resolved"
+    assert days is None
+
+
+def test_an_unresolved_row_beside_a_resolved_one_still_fires(monkeypatch):
+    """Resolving one row must not mute the table."""
+    monkeypatch.setattr(cd, "DATED_CLAIMS", [_resolved(), _claim("2026-08-31")])
+    msg, outcome = cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 1))
+    assert outcome == "expired"
+    assert "EXPIRED 1d ago" in msg
+    assert msg.count("EXPIRED") == 1, "the resolved row must contribute no line"
+
+
+def test_resolved_without_a_source_is_unjustified_and_LOUD(monkeypatch):
+    """The failure direction is the whole design: an unjustified exemption FIRES.
+
+    If a bare `resolved` key silently exempted a row, the cheapest way to stop the
+    advisory nagging would be to add one word — and the table would decay into a
+    list of things somebody once wanted to stop hearing about. Reproduced by
+    execution 2026-09-04, before this guard existed: `{"resolved": True}` with no
+    source and no finding returned ('resolved', None) and went silent.
+    """
+    for missing in ("source", "finding"):
+        row = _resolved()
+        del row[missing]
+        assert cd._claim_status(row, date(2026, 9, 4)) == ("unjustified", None), missing
+        monkeypatch.setattr(cd, "DATED_CLAIMS", [row])
+        msg, outcome = cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 4))
+        assert outcome == "unjustified"
+        assert "unjustified `resolved`" in msg
+
+
+def test_resolved_must_be_a_date_not_merely_truthy(monkeypatch):
+    """`resolved: True` is the shape a hurried edit produces; it is not a re-verification."""
+    assert cd._claim_status(_resolved(resolved=True), date(2026, 9, 4)) == ("unjustified", None)
+    assert cd._claim_status(_resolved(resolved="soon"), date(2026, 9, 4)) == ("unjustified", None)
+    # control: a real ISO date on the same row is accepted
+    assert cd._claim_status(_resolved(), date(2026, 9, 4)) == ("resolved", None)
+
+
+def test_an_expired_row_outranks_an_unjustified_one(monkeypatch):
+    """Worst status present must be the reported one, as for malformed.
+
+    The first version of this test could not fail. Its second row is one day past
+    its own expiry, so `outcome == "expired"` held no matter how the first row was
+    graded — deleting the source/finding guard entirely left it green, measured
+    2026-09-04. Pin the premise as well as the conclusion: a priority test that
+    does not assert what it is prioritising is asserting nothing.
+    """
+    unjust = _resolved(source=None)
+    assert cd._claim_status(unjust, date(2026, 9, 1)) == ("unjustified", None), (
+        "premise: the first row must really be unjustified, or this tests nothing"
+    )
+    monkeypatch.setattr(cd, "DATED_CLAIMS", [unjust, _claim("2026-08-31")])
+    msg, outcome = cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 1))
+    assert outcome == "expired"
+    assert "unjustified `resolved`" in msg, (
+        "the lower-ranked status must still get its own line — the outcome picks one "
+        "label, the message carries every one of them"
+    )
+
+
+def test_an_unjustified_row_outranks_a_due_one(monkeypatch):
+    """The rung of the priority chain that has no independent second cause."""
+    monkeypatch.setattr(cd, "DATED_CLAIMS",
+                        [_resolved(source=None), _claim("2026-09-10")])
+    _, outcome = cd.dated_claims_context(FIRST_PROMPT, today=date(2026, 9, 4))
+    assert outcome == "unjustified"
+
+
+def test_resolved_rows_must_say_who_verified_and_against_what():
+    """A resolved row is an EXEMPTION, and an exemption with no stated reason is
+    mute. Without this, `resolved: true` becomes a silent kill switch that reads
+    identically to a claim nobody ever checked."""
+    for claim in cd.DATED_CLAIMS:
+        if not claim.get("resolved"):
+            continue
+        assert claim.get("source"), f"resolved row with no source: {claim!r}"
+        assert claim.get("finding"), f"resolved row with no finding: {claim!r}"
+        assert str(claim["source"]).startswith("http"), (
+            f"a resolved row's source must be fetchable, not a description: {claim!r}"
+        )
+
+
+def test_resolved_rows_still_carry_a_parseable_expiry():
+    """The hole this branch opens, closed deliberately.
+
+    `resolved` short-circuits BEFORE `expires` is parsed, so a typo in a resolved
+    row's date can no longer be caught as 'malformed' — the exact failure
+    test_malformed_expiry_is_surfaced_not_skipped exists to prevent, walked back
+    in through the new door. The date is kept as the prediction that was made, so
+    it still has to be a date.
+    """
+    for claim in cd.DATED_CLAIMS:
+        if not claim.get("resolved"):
+            continue
+        assert cd._claim_status({k: v for k, v in claim.items() if k != "resolved"},
+                                date(2026, 7, 27))[0] != "malformed", (
+            f"resolved row has an unparseable expiry: {claim!r}"
+        )
+        date.fromisoformat(str(claim["resolved"]))
 
 
 # ---------------- throttle + handler wiring ----------------
