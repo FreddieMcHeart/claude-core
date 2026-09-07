@@ -99,6 +99,47 @@ def test_a_blocked_dispatch_records_no_model(monkeypatch, capsys):
     )
 
 
+# ---------------- tool_input is not schema-checked, so it is not trusted ----------------
+#
+# Found by independent review and REPRODUCED BY EXECUTION before being acted on
+# (2026-09-07): a list or dict arriving as `model` is truthy, so it skips the
+# validation branch entirely and lands as a dict key, where `.get()` raises
+# `TypeError: unhashable type`. `main()` catches it and exits 0, so the dispatch
+# still proceeds — the failure is SILENT, and it also skips every later counter
+# in that same call.
+#
+# The same shape was already reachable one line above, on `subagent_type`, and is
+# fixed here too. Leaving a demonstrated crash adjacent to new code because it
+# predates the diff is how a verification scoped to its own diff stays blind.
+
+
+def test_a_non_string_model_does_not_crash_the_hook(monkeypatch, capsys):
+    saved = _state(monkeypatch)
+    _dispatch(capsys, "general-purpose", model=["sonnet"])
+    assert saved["dispatches_by_model"], "the dispatch must still be counted"
+    key = next(iter(saved["dispatches_by_model"]))
+    assert isinstance(key, str)
+    assert "sonnet" in key, (
+        "the odd value must remain legible on the row rather than being folded "
+        "into a generic sentinel — a malformed dispatch should look malformed"
+    )
+
+
+def test_a_non_string_subagent_type_does_not_crash_the_hook(monkeypatch, capsys):
+    saved = _state(monkeypatch)
+    _dispatch(capsys, ["general-purpose"], model="sonnet")
+    assert isinstance(next(iter(saved["dispatches_by_type"])), str)
+
+
+def test_a_null_subagent_type_falls_back_rather_than_stringifying_none(monkeypatch, capsys):
+    """`str(None)` would put the literal "None" on the status line, which reads as
+    a model called None rather than as an absent field."""
+    saved = _state(monkeypatch)
+    _dispatch(capsys, None, model="sonnet")
+    assert "unknown" in saved["dispatches_by_type"]
+    assert "None" not in saved["dispatches_by_type"]
+
+
 # ---------------- the last dispatch, for a one-glance row ----------------
 
 def test_the_last_dispatch_names_both_the_type_and_the_model(monkeypatch, capsys):
