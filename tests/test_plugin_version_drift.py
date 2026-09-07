@@ -393,15 +393,33 @@ def test_an_unrecognised_path_counts_as_shipped(tmp_path, monkeypatch):
     allowlist of shipped ones, and the direction is the whole design. A new
     top-level directory added later is unknown to this code; treating the
     unknown as shipped makes it fire, treating it as docs would make the pulse
-    go silent on real drift the day someone adds a directory."""
+    go silent on real drift the day someone adds a directory.
+
+    It asserts on the message CONTENT, not on the outcome enum alone. The enum
+    version of this test passed against the pre-change code too — verified by
+    running it against `origin/main`'s hook — because that code fired on any sha
+    mismatch regardless of path. Naming the path is what makes the assertion
+    about the classification rather than about the mismatch.
+    """
     _drift_setup(tmp_path, monkeypatch,
                  lambda r: _commit_file(r, "brandnew/thing.py", "print(1)\n"))
-    assert cd.plugin_version_drift_context(_prompt())[1] == "drifted"
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "brandnew/thing.py" in msg
 
 
 def test_a_gap_it_cannot_classify_fires_rather_than_going_silent(tmp_path, monkeypatch):
     """installed sha is not in this repo's history, so no diff can be taken.
-    An unanswerable question is not a negative answer."""
+    An unanswerable question is not a negative answer.
+
+    This one CANNOT be strengthened into a regression control, and saying so is
+    better than leaving a reader to assume it is one. An unclassifiable gap has
+    no path list to assert on — that is the whole point of it — so the message
+    is byte-identical in shape to what the pre-change code produced, and this
+    test passes against `origin/main`'s hook (verified by running it there). It
+    is a specification test: it pins the direction, so that a later edit
+    collapsing `None` into `[]` flips the outcome to `docs_only` and fails here.
+    """
     repo = _repo(tmp_path)
     _commit_plugin_json(repo, "1.0.0")
     installed = _installed_plugins_file(
