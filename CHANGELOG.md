@@ -2,6 +2,59 @@
 
 <!-- version list -->
 
+## v0.16.1 (2026-09-07)
+
+### Bug Fixes
+
+- **hook**: Let a dated claim record that it was re-verified, and make an unjustified exemption loud
+  ([#63](https://github.com/FreddieMcHeart/claude-core/pull/63),
+  [`b05004a`](https://github.com/FreddieMcHeart/claude-core/commit/b05004a6b40d1c8876734ddfe8d49b0b424c3a73))
+
+- **hook**: Let a dated claim record that it was re-verified, instead of only that its date arrived
+  ([#63](https://github.com/FreddieMcHeart/claude-core/pull/63),
+  [`b05004a`](https://github.com/FreddieMcHeart/claude-core/commit/b05004a6b40d1c8876734ddfe8d49b0b424c3a73))
+
+- **hook**: Log an unjustified claim as warn, and make the priority test able to fail
+  ([#63](https://github.com/FreddieMcHeart/claude-core/pull/63),
+  [`b05004a`](https://github.com/FreddieMcHeart/claude-core/commit/b05004a6b40d1c8876734ddfe8d49b0b424c3a73))
+
+- **hook**: Make an unjustified `resolved` fire instead of silently exempting a row
+  ([#63](https://github.com/FreddieMcHeart/claude-core/pull/63),
+  [`b05004a`](https://github.com/FreddieMcHeart/claude-core/commit/b05004a6b40d1c8876734ddfe8d49b0b424c3a73))
+
+### Chores
+
+- Neutralise employer-derived references in tracked files
+  ([#62](https://github.com/FreddieMcHeart/claude-core/pull/62),
+  [`8592435`](https://github.com/FreddieMcHeart/claude-core/commit/8592435ca252bbbb6d3c97ebf1a5fbbb4c619e87))
+
+- Neutralise the former employer's name in example repo paths
+  ([#62](https://github.com/FreddieMcHeart/claude-core/pull/62),
+  [`8592435`](https://github.com/FreddieMcHeart/claude-core/commit/8592435ca252bbbb6d3c97ebf1a5fbbb4c619e87))
+
+- Replace the two real Jira project keys with synthetic ones
+  ([#62](https://github.com/FreddieMcHeart/claude-core/pull/62),
+  [`8592435`](https://github.com/FreddieMcHeart/claude-core/commit/8592435ca252bbbb6d3c97ebf1a5fbbb4c619e87))
+
+### Documentation
+
+- **cost-audit**: Remove the Sonnet 5 dated-rate split — the increase was cancelled
+  ([#61](https://github.com/FreddieMcHeart/claude-core/pull/61),
+  [`8d1a6ae`](https://github.com/FreddieMcHeart/claude-core/commit/8d1a6aebf476024d513e2d1b7bdf966a30e22eb7))
+
+- **hook**: The resolved row's pointer went stale before the branch landed
+  ([#63](https://github.com/FreddieMcHeart/claude-core/pull/63),
+  [`b05004a`](https://github.com/FreddieMcHeart/claude-core/commit/b05004a6b40d1c8876734ddfe8d49b0b424c3a73))
+
+- **roadmap**: File the ELK layout stage for engineer-design-diagram
+  ([#59](https://github.com/FreddieMcHeart/claude-core/pull/59),
+  [`b509ab4`](https://github.com/FreddieMcHeart/claude-core/commit/b509ab45e42a4d84102e2e6c78b8a6e4d1f481c5))
+
+- **specs**: Tool-result clearing policy, keyed on re-derivability
+  ([#60](https://github.com/FreddieMcHeart/claude-core/pull/60),
+  [`ac187b3`](https://github.com/FreddieMcHeart/claude-core/commit/ac187b3190237f13110ee1849aaac095c10769ec))
+
+
 ## v0.16.0 (2026-08-12)
 
 ### Features
