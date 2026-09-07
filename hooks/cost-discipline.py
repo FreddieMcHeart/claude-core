@@ -3666,6 +3666,36 @@ def handle_pre_tool(payload):
         _d_type = tool_input.get("subagent_type") or "unknown"
         _d_by_type = state.setdefault("dispatches_by_type", {})
         _d_by_type[_d_type] = _d_by_type.get(_d_type, 0) + 1
+
+        # The model, recorded for the status line — which has no other source for
+        # it. The session header and the HUD identity row both show the SESSION's
+        # model, the running-agent line carries no model field at all, and a
+        # sub-agent's turns are not written to the dispatcher's transcript, so
+        # nothing downstream can derive this. Measured 2026-09-07 on a live
+        # session: five running sub-agents, zero `isSidechain` turns in the
+        # dispatcher's own file.
+        #
+        # THE EFFECTIVE MODEL, NOT THE PARAMETER. A dispatch reaching this line
+        # without `model:` was allowed because its agent file declares one, so
+        # reading only tool_input would publish a blank for every reader agent —
+        # 20 of 152 real dispatches on the day this was written — and a blank
+        # reads as "no model set" for an agent whose model is set, just set
+        # elsewhere.
+        #
+        # `unspecified` should be unreachable: the block above returns on the one
+        # path with no answer. It is a visible sentinel rather than an omission
+        # precisely so that being wrong about that shows up on screen instead of
+        # as a missing row.
+        #
+        # This is what was ASKED FOR, not what ran. The executing model lives in
+        # the sub-agent's own task-output file and a PreToolUse hook cannot see
+        # it; the field is named for what it holds.
+        _d_model = (tool_input.get("model")
+                    or (state.get("agent_models") or {}).get(_d_type)
+                    or "unspecified")
+        _d_by_model = state.setdefault("dispatches_by_model", {})
+        _d_by_model[_d_model] = _d_by_model.get(_d_model, 0) + 1
+        state["last_dispatch"] = {"subagent_type": _d_type, "model": _d_model}
         save_state(state)
 
     # ---------- Workflow governance (warn + log only; design 2026-06-02) ----------
