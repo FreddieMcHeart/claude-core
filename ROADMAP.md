@@ -845,8 +845,12 @@ and wants its own review, not a rider on this branch.
 The other two siblings are the cheap half of the same job, by contrast, and do NOT carry
 this defect: `wiki_index_context` returns a message on exactly one outcome (`"dangling"`,
 out of `"skipped"/"clean"/"dangling"`), and `plugin_version_drift_context` returns a
-message on exactly one outcome (`"drifted"`, out of the `"skipped:*"/"in_sync"/"drifted"`
-set). For both, `"warn" if outcome == X else "info"` and `"fired" if advisory else
+message on exactly one outcome (`"drifted"`, out of the
+`"skipped:*"/"in_sync"/"docs_only"/"drifted"` set — `docs_only` was added when the check
+was re-keyed onto what the gap CONTAINS rather than how many commits it is, and it is
+silent by design). The equivalence still holds across that addition: `docs_only` yields
+no advisory and is not `"drifted"`, so both predicates move together. For both,
+`"warn" if outcome == X else "info"` and `"fired" if advisory else
 "not fired"` are the same predicate under different names — verified by reading both
 functions' `return` statements — so converting those two to the property form is a
 genuine no-op and is the cheap half of this job. Only `dated_claims_context` has more

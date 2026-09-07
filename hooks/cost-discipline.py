@@ -2687,11 +2687,54 @@ def _commits_behind(repo_path, old_sha, new_sha):
     return None
 
 
+PLUGIN_NON_SHIPPING_PREFIXES = ("docs/", "tests/", ".github/")
+
+
+def _is_shipped_path(rel_path):
+    """True when a repo-relative path is part of what the plugin INSTALLS.
+
+    This is a DENYLIST of documentation/CI/test paths, and the direction is
+    load-bearing rather than a convenience: anything unrecognised counts as
+    shipped. An allowlist would go quiet on the day someone adds a new
+    top-level component directory, and a detector that fails silent is worse
+    than one that fires occasionally on prose — the first failure is invisible,
+    the second is merely annoying.
+
+    Top-level `*.md` (README, ROADMAP, CHANGELOG, CLAUDE.md) is prose ABOUT the
+    repo. A nested one — `skills/<x>/SKILL.md` — is a plugin component, which is
+    why the test is on the slash and not on the extension alone.
+    """
+    if rel_path.startswith(PLUGIN_NON_SHIPPING_PREFIXES):
+        return False
+    return not ("/" not in rel_path and rel_path.endswith(".md"))
+
+
+def _shipped_paths_changed(repo_path, old_sha, new_sha):
+    """Sorted shipped paths changed in old..new, or None when UNANSWERABLE.
+
+    None and [] are different answers and the caller must not conflate them:
+    [] means "looked, and the gap is documentation only"; None means the diff
+    could not be taken at all (installed commit absent from this history, git
+    failure, timeout). An unanswerable question is not a negative answer, so
+    None fires and [] does not.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_path), "diff", "--name-only",
+             f"{old_sha}..{new_sha}"],
+            capture_output=True, text=True, timeout=HYGIENE_GIT_TIMEOUT)
+        if out.returncode != 0:
+            return None
+        return sorted(p for p in out.stdout.split("\n") if p and _is_shipped_path(p))
+    except Exception:
+        return None
+
+
 def plugin_version_drift_context(state):
     """(advisory_or_None, outcome) comparing the installed claude-core-hooks copy
     against the repository it was built from.
 
-    Outcomes: 'in_sync' / 'drifted' / one of four 'skipped:<reason>' values
+    Outcomes: 'in_sync' / 'docs_only' / 'drifted' / one of four 'skipped:<reason>' values
     ('not_installed', 'repo_unresolved', 'manifest_unreadable',
     'missing_version') — a flat 'skipped' cannot tell "not installed under
     this name" apart from "found the repo but its manifest won't parse", and
@@ -2705,6 +2748,22 @@ def plugin_version_drift_context(state):
     it loaded, and this check cannot see that. The nudge names which two states
     it checked and stays silent about the third rather than implying it knows
     what is executing.
+
+    WHAT THE GAP CONTAINS decides whether it fires, not how big the gap is.
+    The detector counted commits while its printed remedy compared version
+    strings; under conventional commits a `docs:`/`chore:` run moves the sha
+    and never moves the version, so the pulse reported a gap on every prompt
+    while `claude plugin update` correctly answered "already at the latest
+    version". Neither side was wrong — they measured different quantities, and
+    the one being measured was not the one that would justify acting. So a gap
+    touching no shipped path returns 'docs_only' and stays silent, and a gap
+    that cannot be classified at all fires rather than going quiet.
+
+    The advisory's REMEDY is chosen the same way. When both sides read the same
+    version the updater cannot act, so it is not named; the message says why and
+    points at the two things that do work. `log_fire` grades 'docs_only' as info
+    rather than warn, so the determination is still recorded — silence here is
+    silence in the reader's context, not in the log.
 
     Primary signal is `gitCommitSha` — a claim about the exact revision,
     immune to an unreleased checkout sharing a version string with a stale one
@@ -2750,10 +2809,19 @@ def plugin_version_drift_context(state):
     installed_sha = record.get("gitCommitSha")
     repo_sha = _git_head_sha(repo_path) if installed_sha else None
 
+    shipped = None
     if installed_sha and repo_sha:
         signal = "commit"
         if installed_sha == repo_sha:
             return (None, "in_sync")
+        shipped = _shipped_paths_changed(repo_path, installed_sha, repo_sha)
+        if shipped is not None and not shipped:
+            # Looked, and the gap contains nothing the plugin installs. The
+            # installed copy BEHAVES identically to the repo; what it lacks is
+            # documentation. Firing here spends a line of every session's
+            # context on something nobody can act on, and teaches the reader to
+            # skip this advisory — which costs the one real item later.
+            return (None, "docs_only")
         distance = _commits_behind(repo_path, installed_sha, repo_sha)
         detail = (f" ({distance} commit(s) behind)" if distance is not None
                   else " (diverged — installed commit is not an ancestor of repo HEAD)")
@@ -2763,12 +2831,41 @@ def plugin_version_drift_context(state):
             return (None, "in_sync")
         detail = ""
 
+    what = ""
+    if shipped:
+        shown = ", ".join(f"`{p}`" for p in shipped[:5])
+        what = (f" Shipped paths that changed: {shown}"
+                f"{f' (+{len(shipped) - 5} more)' if len(shipped) > 5 else ''}.")
+
+    if installed_version == repo_version:
+        # Reachable whenever the drift is carried by commit types that do not
+        # cut a release — `refactor:`, `chore:` — which can still touch
+        # executable paths. Naming the updater here would be the
+        # remedy-inside-the-trap: it keys on the version string, would report
+        # the plugin already current, and would write nothing. A nudge whose
+        # only actionable line is a no-op teaches the reader to distrust the
+        # diagnosis, which was correct.
+        return (
+            f"**Plugin drift** — the installed `{PLUGIN_NAME}` copy has drifted "
+            f"from the repository{detail}, while both sides still read the same "
+            f"version (v{installed_version}).{what} Compared via {signal}. Two "
+            f"states checked: repository vs. on-disk installed copy — NOT the "
+            f"copy the currently-running process is serving (an update lands on "
+            f"disk and needs a session restart to apply). The updater keys on "
+            f"the version string, so it cannot act while these match — "
+            f"reinstalling the plugin, or landing a releasing commit, is what "
+            f"moves it.",
+            "drifted",
+        )
+
     return (
         f"**Plugin version drift** — the installed `{PLUGIN_NAME}` copy "
-        f"(v{installed_version}) is behind the repository (v{repo_version}){detail}. "
+        f"(v{installed_version}) is behind the repository (v{repo_version}){detail}."
+        f"{what} "
         f"Compared via {signal}. Two states checked: repository vs. on-disk "
         f"installed copy — NOT the copy the currently-running process is "
-        f"serving (`claude plugin update` needs a restart to apply). Run "
+        f"serving (an update lands on disk and needs a session restart to "
+        f"apply). Run "
         # The MARKETPLACE-QUALIFIED key, not PLUGIN_NAME. The bare name is
         # rejected — `claude plugin update claude-core-hooks` exits with
         # `Plugin "claude-core-hooks" not found`, while
