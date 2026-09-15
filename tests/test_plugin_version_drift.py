@@ -551,6 +551,45 @@ def test_an_absent_live_skills_dir_shadows_nothing(tmp_path, monkeypatch):
     assert "skills/deleg/SKILL.md" in msg
 
 
+def test_a_live_name_pointing_at_a_DIFFERENT_repo_skill_shadows_neither(
+        tmp_path, monkeypatch):
+    """The dangerous direction, found in review.
+
+    `~/.claude/skills/deleg` -> `<repo>/skills/other`. Keying the shadowed set on
+    the LIVE entry's basename marks `deleg` shadowed, so genuine, unshadowed
+    drift in `skills/deleg/**` is suppressed and the advisory goes silent about
+    a real change. A false positive here is the worst outcome this detector has:
+    silence is indistinguishable from health.
+
+    Neither name is safely shadowed under a mismatch — `skills/deleg` in the repo
+    is served by nothing, and the plugin's own `skills/other` is still its own
+    skill. Ambiguity fires.
+    """
+    repo = _drift_setup(
+        tmp_path, monkeypatch,
+        lambda r: _commit_file(r, "skills/deleg/SKILL.md", "# skill\n"))
+    (repo / "skills" / "other").mkdir(parents=True, exist_ok=True)
+    _link_live_skill(tmp_path, monkeypatch, "deleg", repo / "skills" / "other")
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted", "a name mismatch must not establish shadowing"
+    assert "skills/deleg/SKILL.md" in msg
+
+
+def test_a_symlink_into_the_repo_but_not_under_skills_shadows_nothing(
+        tmp_path, monkeypatch):
+    """Resolving somewhere inside the repo is not enough. The filter suppresses
+    `skills/<name>/`, so shadowing is only established when the live entry points
+    at exactly that directory."""
+    repo = _drift_setup(
+        tmp_path, monkeypatch,
+        lambda r: _commit_file(r, "skills/deleg/SKILL.md", "# skill\n"))
+    (repo / "lib").mkdir(parents=True, exist_ok=True)
+    _link_live_skill(tmp_path, monkeypatch, "deleg", repo / "lib")
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "skills/deleg/SKILL.md" in msg
+
+
 def test_a_broken_symlink_shadows_nothing(tmp_path, monkeypatch):
     """A dangling link resolves to a path that does not exist, so it cannot be
     established as pointing into the repo. Must not crash, must still fire."""
