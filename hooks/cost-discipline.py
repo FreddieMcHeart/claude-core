@@ -221,6 +221,10 @@ PLUGIN_NAME = "claude-core-hooks"   # this hook's own plugin identity — a fact
 PLUGINS_DIR = Path.home() / ".claude" / "plugins"
 INSTALLED_PLUGINS_FILE = PLUGINS_DIR / "installed_plugins.json"
 KNOWN_MARKETPLACES_FILE = PLUGINS_DIR / "known_marketplaces.json"
+# Where skills are actually served from. An entry here that symlinks into the
+# plugin's SOURCE repo shadows the plugin's own copy of that skill: the session
+# reads the repo, so drift in the cached copy cannot reach anyone.
+LIVE_SKILLS_DIR = Path.home() / ".claude" / "skills"
 
 READ_TOOLS = {"Bash", "Read", "Grep", "Glob"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
@@ -2730,11 +2734,59 @@ def _shipped_paths_changed(repo_path, old_sha, new_sha):
         return None
 
 
+def _shadowed_skill_names(repo_path):
+    """Skill names served from `repo_path` instead of from the plugin's own copy.
+
+    SHIPPED is not READ. A skill whose live entry symlinks into the source repo
+    is loaded from the repo, so the plugin's cached copy of it is never opened
+    and drift in that copy cannot reach any session. Naming it spends the
+    advisory's credibility on something nobody can act on — the same
+    substitution the harness-hygiene pulse makes when it reports DIRTY paths for
+    IRREPLACEABLE ones.
+
+    Shadowing must be POSITIVELY established. A real directory, a link pointing
+    somewhere else, a dangling link, an unreadable directory: each leaves the
+    question open, and an open question is not a negative answer. The caller
+    keeps the path and the advisory fires. Same direction as `_is_shipped_path`
+    above, and for the same reason — silent-and-wrong is worse than loud.
+    """
+    try:
+        repo_real = Path(repo_path).resolve()
+        entries = sorted(LIVE_SKILLS_DIR.iterdir())
+    except Exception:
+        return set()
+    names = set()
+    for entry in entries:
+        if not entry.is_symlink():
+            continue
+        try:
+            target = entry.resolve(strict=True)
+        except Exception:
+            continue    # dangling link, or a symlink loop
+        if target == repo_real or repo_real in target.parents:
+            names.add(entry.name)
+    return names
+
+
+def _drop_shadowed_paths(repo_path, paths):
+    """`paths` minus the skills served from the source repo, order preserved.
+
+    Filters PER PATH, never per advisory: one shadowed skill in a gap that also
+    touches a hook must not suppress the hook.
+    """
+    shadowed = _shadowed_skill_names(repo_path)
+    if not shadowed:
+        return list(paths)
+    return [p for p in paths
+            if not any(p.startswith(f"skills/{name}/") for name in shadowed)]
+
+
 def plugin_version_drift_context(state):
     """(advisory_or_None, outcome) comparing the installed claude-core-hooks copy
     against the repository it was built from.
 
-    Outcomes: 'in_sync' / 'docs_only' / 'drifted' / one of four 'skipped:<reason>' values
+    Outcomes: 'in_sync' / 'docs_only' / 'shadowed_only' / 'drifted' / one of
+    four 'skipped:<reason>' values
     ('not_installed', 'repo_unresolved', 'manifest_unreadable',
     'missing_version') — a flat 'skipped' cannot tell "not installed under
     this name" apart from "found the repo but its manifest won't parse", and
@@ -2758,6 +2810,17 @@ def plugin_version_drift_context(state):
     the one being measured was not the one that would justify acting. So a gap
     touching no shipped path returns 'docs_only' and stays silent, and a gap
     that cannot be classified at all fires rather than going quiet.
+
+    SHIPPED IS STILL NOT READ, which is the same substitution one step further
+    in. A skill whose live entry symlinks into the source repo is served from
+    the repo; the plugin's cached copy of it is opened by nothing, so drift
+    there cannot reach a session however executable the file looks. A gap whose
+    every shipped path is shadowed that way returns 'shadowed_only' and stays
+    silent. Measured 2026-09-15: four paths reported, zero actionable — two were
+    the version bump itself and two were a skill served from the repo, proven by
+    a string present in the repo's copy and absent from the cached one. See
+    `_shadowed_skill_names` for why shadowing has to be positively established
+    rather than assumed.
 
     The advisory's REMEDY is chosen the same way. When both sides read the same
     version the updater cannot act, so it is not named; the message says why and
@@ -2822,6 +2885,14 @@ def plugin_version_drift_context(state):
             # context on something nobody can act on, and teaches the reader to
             # skip this advisory — which costs the one real item later.
             return (None, "docs_only")
+        if shipped:
+            readable = _drop_shadowed_paths(repo_path, shipped)
+            if not readable:
+                # Every shipped path in the gap belongs to a skill served from
+                # the repo itself. The cached copy that drifted is read by
+                # nobody, so there is nothing a session could do differently.
+                return (None, "shadowed_only")
+            shipped = readable
         distance = _commits_behind(repo_path, installed_sha, repo_sha)
         detail = (f" ({distance} commit(s) behind)" if distance is not None
                   else " (diverged — installed commit is not an ancestor of repo HEAD)")

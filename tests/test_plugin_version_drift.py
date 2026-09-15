@@ -465,3 +465,98 @@ def test_differing_versions_still_print_the_updater_command(tmp_path, monkeypatc
     msg, outcome = cd.plugin_version_drift_context(_prompt())
     assert outcome == "drifted"
     assert f"`claude plugin update {KEY}`" in msg
+
+
+# ---------------- SHIPPED is not READ: shadowed skills ----------------
+# A skill installed as a symlink from the live skills directory into the SOURCE
+# repo is served from the repo, never from the plugin's own copy. Drift in the
+# plugin's copy of that skill therefore cannot affect any session, and naming it
+# spends the advisory's credibility on something nobody can act on. Same
+# substitution the harness-hygiene pulse makes with DIRTY for IRREPLACEABLE.
+# Fleet #65.
+
+
+def _link_live_skill(tmp_path, monkeypatch, name, target):
+    """Point the live skills dir at tmp and symlink one skill name at `target`."""
+    live = tmp_path / "live-skills"
+    live.mkdir(exist_ok=True)
+    (live / name).symlink_to(target)
+    monkeypatch.setattr(cd, "LIVE_SKILLS_DIR", live)
+    return live
+
+
+def test_a_gap_touching_only_a_shadowed_skill_does_not_fire(tmp_path, monkeypatch):
+    """The live case: skills/delegation-discipline drifted in the plugin's cached
+    copy while ~/.claude/skills/delegation-discipline symlinks into the repo. The
+    session reads the repo. Nothing is wrong and there is nothing to do."""
+    repo = _drift_setup(
+        tmp_path, monkeypatch,
+        lambda r: _commit_file(r, "skills/deleg/SKILL.md", "# skill\n"))
+    _link_live_skill(tmp_path, monkeypatch, "deleg", repo / "skills" / "deleg")
+    assert cd.plugin_version_drift_context(_prompt()) == (None, "shadowed_only")
+
+
+def test_a_shadowed_skill_does_not_hide_an_unshadowed_shipped_path(tmp_path, monkeypatch):
+    """The failure that would matter: suppressing a whole advisory because ONE of
+    its paths is shadowed. Filter per path, never per advisory."""
+    def two_files(r):
+        _commit_file(r, "skills/deleg/SKILL.md", "# skill\n")
+        _commit_file(r, "hooks/cost-discipline.py", "print(1)\n")
+    repo = _drift_setup(tmp_path, monkeypatch, two_files)
+    _link_live_skill(tmp_path, monkeypatch, "deleg", repo / "skills" / "deleg")
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "hooks/cost-discipline.py" in msg, "the unshadowed path must still be named"
+    assert "skills/deleg/SKILL.md" not in msg, "the shadowed path must not be named"
+
+
+def test_a_real_directory_does_not_shadow(tmp_path, monkeypatch):
+    """Shadowing must be POSITIVELY established, never assumed. A real directory
+    at the live path is a second copy, not a view of the repo — it says nothing
+    about which copy is served, so the advisory must still fire. Same direction as
+    the denylist above: the unknown case errs toward speaking."""
+    repo = _drift_setup(
+        tmp_path, monkeypatch,
+        lambda r: _commit_file(r, "skills/deleg/SKILL.md", "# skill\n"))
+    live = tmp_path / "live-skills"
+    (live / "deleg").mkdir(parents=True)
+    monkeypatch.setattr(cd, "LIVE_SKILLS_DIR", live)
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "skills/deleg/SKILL.md" in msg
+    assert repo.exists()
+
+
+def test_a_symlink_pointing_outside_the_repo_does_not_shadow(tmp_path, monkeypatch):
+    """A symlink is not enough — it has to resolve INTO the source repo. One
+    pointing anywhere else leaves the plugin's copy as the thing being read."""
+    _drift_setup(tmp_path, monkeypatch,
+                 lambda r: _commit_file(r, "skills/deleg/SKILL.md", "# skill\n"))
+    elsewhere = tmp_path / "somewhere-else"
+    elsewhere.mkdir()
+    _link_live_skill(tmp_path, monkeypatch, "deleg", elsewhere)
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "skills/deleg/SKILL.md" in msg
+
+
+def test_an_absent_live_skills_dir_shadows_nothing(tmp_path, monkeypatch):
+    """Could-not-look is not a negative answer — the same rule the rest of this
+    file is built on."""
+    _drift_setup(tmp_path, monkeypatch,
+                 lambda r: _commit_file(r, "skills/deleg/SKILL.md", "# skill\n"))
+    monkeypatch.setattr(cd, "LIVE_SKILLS_DIR", tmp_path / "no-such-dir")
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "skills/deleg/SKILL.md" in msg
+
+
+def test_a_broken_symlink_shadows_nothing(tmp_path, monkeypatch):
+    """A dangling link resolves to a path that does not exist, so it cannot be
+    established as pointing into the repo. Must not crash, must still fire."""
+    _drift_setup(tmp_path, monkeypatch,
+                 lambda r: _commit_file(r, "skills/deleg/SKILL.md", "# skill\n"))
+    _link_live_skill(tmp_path, monkeypatch, "deleg", tmp_path / "gone")
+    msg, outcome = cd.plugin_version_drift_context(_prompt())
+    assert outcome == "drifted"
+    assert "skills/deleg/SKILL.md" in msg
