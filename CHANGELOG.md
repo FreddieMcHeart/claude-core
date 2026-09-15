@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.18.1 (2026-09-15)
+
+### Bug Fixes
+
+- **cost-discipline**: Plugin drift must not report skills served from the repo
+  ([#67](https://github.com/FreddieMcHeart/claude-core/pull/67),
+  [`5a996a2`](https://github.com/FreddieMcHeart/claude-core/commit/5a996a2fd1c14943a196e737f9b19958068dea5d))
+
+- **cost-discipline**: Shadowing test must be exact, not "somewhere in the repo"
+  ([#67](https://github.com/FreddieMcHeart/claude-core/pull/67),
+  [`5a996a2`](https://github.com/FreddieMcHeart/claude-core/commit/5a996a2fd1c14943a196e737f9b19958068dea5d))
+
+
 ## v0.18.0 (2026-09-15)
 
 ### Bug Fixes
