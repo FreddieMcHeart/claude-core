@@ -114,6 +114,165 @@ mechanisms after checking one. A rule that names an escape the enforcing code
 does not honour is worse than a rule with no escape, because it sends the reader
 to the one door that is painted on.
 
+## Five rules for WHEN and WHETHER, once the how-much question is settled
+
+Everything above answers *how much*. These answer *when to dispatch*, *what is
+pre-authorised*, and *what to do while a dispatch is already in flight*. Each is
+a rule plus the measurement that produced it.
+
+### 1. Read-and-analysis dispatch is pre-authorised. Writes are not.
+
+A sub-agent whose product is OUTPUT rather than MUTATION — search, inspection,
+measurement, summarisation — needs no per-dispatch permission. An EDIT-capable
+dispatch is an ordinary delegation decision: permitted, not pre-authorised, and
+it clears the ceiling above on its own merits.
+
+**Scope this by ACTION, never by model tier.** Written first as "cheap models for
+reads", which fixed one instance and left the class: a judgment-heavy read still
+needed a permission round-trip, so the remedy cost more than the reading it was
+meant to save. **A cost-saving rule whose remedy requires permission is a rule
+that will not be used.** Check any new guard against that — does its remedy need
+something the agent cannot grant itself?
+
+**This is not licence to wrap everything.** Measured over one session's whole
+transcript (~2,150 tool calls; the table is in this repo's `ROADMAP.md`, under
+the 2026-07-29 measurement): a dispatch returns **~1,777 chars on average — more
+than an average `Bash` call at ~936**. Wrapping one cheap command in a scout is a
+net loss. Break-even is per *material*, not per call: a scout pays when the
+volume it must examine greatly exceeds the answer it returns, and loses when it
+wraps a one-line command.
+
+**So the discriminator is "how much would I have to look at to answer this?"** —
+not "is this a read?" High ratio of material-examined to answer-returned →
+dispatch; low ratio → inline. The same output also costs more the earlier it
+lands in a long session, because it is re-billed as a cache read every
+subsequent turn.
+
+**Scout prompts: demand the citation separately from the claim.** Structure
+(path, line, the literal quoted line) is cheap to verify; interpretation is where
+fabrication lands — observed twice in one day from two different scouts, each
+returning a correct file list with an invented reading. Give the scout an
+explicit place to write "not settled by the commands I ran": a scout with nowhere
+to record uncertainty will record certainty. Where you already know one expected
+item, withhold it as a completeness control.
+
+### 2. A long analysis goes to a scout at its START, never when a block forces it
+
+When the work is recognisably a long analysis — a corpus sweep, a code survey
+across several modules, a knowledge-base read, a "what does this system currently
+do" question — dispatch BEFORE the first inline read, not after the tenth.
+
+**The failure this names is TIMING, and it is invisible because every other rule
+was satisfied.** Measured on a session that read inline until the hard block
+fired at exactly 40, then dispatched — the remedy the block exists to force.
+Nothing was over-read by the ceiling's standard; nothing was fanned out too wide.
+The dispatch simply happened at the worst moment: after the context had already
+been paid for. **The scout was the right instrument the whole time and was
+reached for as a penalty.**
+
+This does not loosen the break-even in rule 1, and reading it that way is the
+obvious error. Wrapping a one-line command in a scout is still a net loss. What
+this adds is *when* to apply that test — at the moment you recognise the shape of
+the work, not partway through it. **A hard block is not a trigger; it is evidence
+the trigger was missed.** If one fires, say so plainly in the report: an
+over-read nobody counts is an over-read nobody can stop.
+
+### 3. A required step whose input is ready goes to the background NOW
+
+Scope: every other rule here is scoped to VOLUME. This one is scoped to LATENCY.
+
+**Trigger — three conditions, all required:** the step is required anyway; its
+input is complete now; the foreground does not need its output to continue. A
+code review, a long verification run, a corpus replay, a CI wait. Your report
+needs the review; the review does not need your report.
+
+**Why the other rules cannot catch it:** the floor asks *have you read too much
+inline*, the ceiling asks *have you fanned out too wide*. Both measure HOW MUCH;
+neither has a slot for WHEN. A session can satisfy both while a ready, mandatory
+step sits idle for an hour — measured on a session that left its mandatory code
+review until the very end, having had a reviewable diff for most of the session.
+
+**This does not argue with the ceiling.** Same single dispatch, moved earlier: no
+extra agents, no wider fan-out, no additional cost. A proposal that ADDS
+dispatches rather than re-timing one is a ceiling question and is not authorised
+here.
+
+**It deliberately does NOT say "parallelise independent work."** Rejected
+example: writing tests concurrently with the implementation they cover. Under
+TDD the test drives the implementation; running them together means the test
+drives nothing, and both come out of one mental model in one sitting, agreeing by
+construction. Being well-specified upfront is exactly the condition that makes
+them agree for the wrong reason. Independence — a different agent that has not
+seen the implementation — is what buys anything there, not concurrency.
+
+### 4. A dispatch and doing it yourself are ALTERNATIVES, not a hedge
+
+Once a scout is dispatched, that reading is DELEGATED. Do not then do the same
+reading inline "while waiting". Either wait for the reply, or decide the scout is
+no longer needed and say so — never run both branches to completion.
+
+**Measured instance:** a scout was dispatched to read one table row from an index
+file. It was slow (457s); the work was needed, so the row was read inline and
+edited. The scout then returned a correct, complete, verbatim answer describing
+the file **as it was before the edit** — 118,919 tokens for a result already
+superseded by the dispatcher's own work.
+
+**No rule above can catch it.** The floor, the ceiling and the latency rule are
+all satisfied — one scout, dispatched immediately, well inside every count. The
+waste is that the same work was performed twice, and nothing measures duplication
+between a dispatch and its dispatcher.
+
+**Same defect as "do not edit files while a measurement is in flight", from the
+other side.** A dispatch puts a claim on a subject; until it returns, that
+subject is neither yours to read nor to edit.
+
+**The impatience is legitimate; the hedge is not.** Make the choice once, out
+loud: **wait**, and say you are waiting — cheapest when the reply feeds the next
+step; or **take it back**, saying so *before* touching the subject ("the scout is
+slower than the work, I am reading it inline and will discard its reply"), and
+then actually discard it.
+
+**The tempting middle to avoid:** treating a returning scout as corroboration of
+work already done. It corroborates nothing — it read an earlier version, so
+agreement is expected and disagreement is ambiguous between drift and error. **A
+measurement taken before your change is not a check on your change.** When a
+superseded reply arrives, say in one line that it was superseded and what it
+cost.
+
+### 5. The pre-compaction knowledge-base check is ALWAYS dispatched
+
+Before any compaction, handoff, or end-of-session save, the reconnaissance pass —
+what is genuinely new, which existing page this session advanced or invalidated,
+what the store's conventions are — goes to a sub-agent. Every time.
+
+**It is rule 1's volume argument at the WORST POSSIBLE MOMENT.** The check sweeps
+an entire vault — on the order of a hundred files — to produce about a page of
+answer, landing exactly when the prefix is largest and about to be re-billed into
+a summary. Measured on one such day, cache-read was **96% of every token spent**
+in both rate-limit windows. That makes it the most expensive AND most mechanical
+read in the workflow — the worst thing to keep for yourself.
+
+**The brief must demand three things the obvious version omits:**
+
+- **The DENOMINATOR.** A recursive search can silently cover a fraction of the
+  corpus — an ignore rule, a symlink, a path-anchoring difference. Have the scout
+  report files covered, cross-checked against an independent enumeration. Without
+  that, "no existing page covers this" is not a result.
+- **BOTH DIRECTIONS.** NEW (durable insight not yet on disk) and STALE (a page
+  this session advanced, corrected or invalidated). A check that only hunts for
+  new pages leaves outdated claims standing, and a stale claim is worse than an
+  absent one.
+- **THE STORE'S GIT STATE, before anything is written.** On one run this stopped
+  a bad write: the scout reported the vault behind its remote AND ahead with
+  unpushed local work, the local commit sharing a title with one of the missing
+  remote commits at a different sha — duplicate work, another session plausibly
+  mid-edit. **The save step is allowed to come back BLOCKED; reporting it blocked
+  is a correct outcome, not a failure to finish.**
+
+**How to apply:** dispatch as the FIRST action of the step, before writing any
+summary text. If blocked, record what is OWED and where each finding belongs, so
+the next session writes those pages instead of rediscovering them.
+
 ## Common mistakes
 
 | Thought | Reality |

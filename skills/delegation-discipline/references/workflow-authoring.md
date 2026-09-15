@@ -43,6 +43,58 @@ if (results.length < MIN_VIABLE) return { status:'aborted', partial: results };
 //    "[WRITE BOUNDARY] Read-only. No Jira/PRs/git push/Slack; report findings only."
 ```
 
+## Route and budget BEFORE writing the script — a Workflow is a fan-out of dispatches
+
+`delegation-discipline` and `models-router` are used TOGETHER with this file, never
+one without the others, and both run BEFORE the script is authored.
+
+**The instance this exists to stop.** A 36-agent consolidation workflow was written
+with no `model:` on any `agent()` call. Without one an agent inherits the MAIN-LOOP
+model, so all 36 routed to the most expensive tier because the session's main was on
+it. Fourteen had spawned before it was stopped. Consulted afterwards, the router put
+every stage on the mid tier — a section rewrite against a checklist and a two-text
+comparison are neither cross-repo reasoning nor architecture synthesis, which are the
+only things that earn the top tier for a sub-agent.
+
+**The cause is a documented conflict, not forgetfulness.** Harness guidance for
+Workflow scripts says to omit `model:` and let the agent inherit; delegation guidance
+says every dispatch passes an explicit `model:`. Both are true and only one is in
+front of the author at the moment the script is written. **The document you are
+reading at the moment of the decision wins — so the check has to fire at authoring
+time or it does not fire at all.**
+
+**The omission is invisible in a way an ordinary dispatch is not.** A single `Agent`
+call with no `model:` can be refused by a cost-discipline hook. A Workflow script
+carries its dispatches inside a function argument, so nothing inspects them, nothing
+warns, and the launch output names the agent count but not the tier. **The one guard
+that catches this class cannot see into a workflow** — treat the script as unguarded
+territory and do by hand what the hook does elsewhere.
+
+**In order:**
+
+1. **`delegation-discipline` FIRST** — decide whether this is a fan-out at all. The
+   over-delegation ceiling applies to a workflow more than to anything else, because
+   the script makes width free to type. A workflow wrapping work you could finish in
+   a handful of calls is the ceiling's worst case, not its exception.
+2. **`models-router` SECOND, once per STAGE, not once per workflow.** Stages differ:
+   a condense stage and a loss-audit stage are different tasks and can land on
+   different tiers. Routing the workflow as a unit prices the cheapest stage at the
+   most expensive stage's rate.
+3. **Then write the script, with `model:` AND `effort:` on every `agent()` call.**
+   Omitting `effort:` inherits the session's, which on a deep-thinking main is the
+   expensive end.
+4. **State the fan-out in the report BEFORE launching:** how many agents, at which
+   tier, across which stages. `36 agents, mid tier, three stages` is a number the
+   operator can stop. "Launched in background" is not.
+
+**Put this guidance in a file your project controls.** A vendored reference — one
+resolved from a plugin cache, or rewritten on every plugin update — is not a place
+to put a decision: the edit survives, works, and disappears later without an error,
+so the rule looks present right up until the moment it is silently absent. Before
+writing guidance into any file, ask whether this repository controls it. If it does
+not, treat that file as read-only upstream input, however wrong it is, and put the
+rule somewhere versioned.
+
 ## Minimum viable workflow (copy-start)
 
 ```js
