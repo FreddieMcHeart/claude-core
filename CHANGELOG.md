@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.18.0 (2026-09-15)
+
+### Bug Fixes
+
+- **delegation-discipline**: Name the three new invocation moments in the description
+  ([#66](https://github.com/FreddieMcHeart/claude-core/pull/66),
+  [`3155851`](https://github.com/FreddieMcHeart/claude-core/commit/31558516ef676b25b9919c1104332ea72ec5ae65))
+
+### Features
+
+- **delegation-discipline**: Absorb the when/whether rules from the private harness manual
+  ([#66](https://github.com/FreddieMcHeart/claude-core/pull/66),
+  [`3155851`](https://github.com/FreddieMcHeart/claude-core/commit/31558516ef676b25b9919c1104332ea72ec5ae65))
+
+
 ## v0.17.0 (2026-09-07)
 
 ### Bug Fixes
