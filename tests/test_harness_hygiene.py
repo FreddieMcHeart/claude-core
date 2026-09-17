@@ -434,26 +434,44 @@ def test_under_both_thresholds_is_silent(monkeypatch):
 def test_over_file_count_fires(monkeypatch):
     msg = _ctx(monkeypatch, count=11, oldest=0)
     assert msg is not None
-    assert "11 uncommitted files" in msg
+    assert "11 stranded files" in msg
     assert "limit 10" in msg
 
 
 def test_over_age_fires(monkeypatch):
     msg = _ctx(monkeypatch, count=1, oldest=8)
     assert msg is not None
-    assert "oldest dirty 8d" in msg
+    assert "oldest stranded 8d" in msg
     assert "limit 7d" in msg
 
 
 def test_over_both_reports_both_reasons(monkeypatch):
     msg = _ctx(monkeypatch, count=14, oldest=9)
-    assert "14 uncommitted files" in msg and "oldest dirty 9d" in msg
+    assert "14 stranded files" in msg and "oldest stranded 9d" in msg
 
 
 def test_nudge_warns_against_add_all(monkeypatch):
     """The pile may hold another session's work — the nudge must say so."""
     msg = _ctx(monkeypatch, count=14, oldest=9)
     assert "git add -A" in msg
+
+
+def test_nudge_names_a_remedy_other_than_committing(monkeypatch):
+    """The one path this pulse reports on the live harness is `settings.json`, which is
+    stranded AND deliberately uncommittable — committing it is a permission widening the
+    operator declined (#24). An advisory whose only remedy is "commit it" therefore names
+    an action its reader must not take, and the reader's only way to silence it is the
+    wrong one. The nudge must say what to do instead, in the same breath."""
+    msg = _ctx(monkeypatch, count=14, oldest=9)
+    assert "deliberately unversioned" in msg
+    assert "durable" in msg, "must name the non-commit remedy, not just forbid committing"
+
+
+def test_nudge_explains_what_stranded_means(monkeypatch):
+    """`stranded` is this pulse's own coinage — a reader meeting it in a prompt banner has
+    no way to look it up. The message carries its own definition or it is jargon."""
+    msg = _ctx(monkeypatch, count=14, oldest=9)
+    assert "origin/main" in msg
 
 
 def test_unscannable_repo_is_silent(monkeypatch):
@@ -470,7 +488,7 @@ def test_unknown_origin_main_emits_distinct_message_not_silence(monkeypatch):
     msg = cd.hygiene_context({"prompts_seen": 1})
     assert msg is not None
     assert "origin/main" in msg
-    assert "uncommitted files" not in msg, "must not read like the normal count nudge"
+    assert "stranded files" not in msg, "must not read like the normal count nudge"
 
 
 def test_unknown_origin_main_still_respects_the_throttle(monkeypatch):
