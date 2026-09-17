@@ -1767,9 +1767,11 @@ def hygiene_context(state):
     listed = ", ".join(f"{p} ({a}d)" for p, a in samples)
     return (
         f"**Harness hygiene** — `~/.claude` has {' and '.join(reasons)}. Stranded means "
-        f"the content matches no blob on `origin/main`, so it exists only in this "
-        f"checkout — a path byte-identical to `origin/main` is not counted, and a parked "
-        f"branch is not dirt. Back each one up. Committing is the usual way: group by "
+        f"the path is not reproducible from `origin/main`: its content differs from what "
+        f"`origin/main` holds at that path, or `origin/main` holds nothing there, or it "
+        f"is an uncommitted deletion. A path byte-identical to `origin/main`'s copy at "
+        f"the same path is not counted, so a parked checkout is not dirt. Back each one "
+        f"up. Committing is the usual way: group by "
         f"concern, stage only related paths, never `git add -A`, since the pile may hold "
         f"another session's work. Where a path is deliberately unversioned — a live "
         f"`settings.json`, auto-memory — copy it somewhere durable instead; do not commit "

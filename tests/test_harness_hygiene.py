@@ -474,6 +474,18 @@ def test_nudge_explains_what_stranded_means(monkeypatch):
     assert "origin/main" in msg
 
 
+def test_nudge_definition_covers_the_deletion_branch(monkeypatch):
+    """_hygiene_classify_stranded() counts a deletion UNCONDITIONALLY — see
+    test_scan_deleted_file_counts_even_if_it_existed_on_origin_main, where a path whose
+    content IS on origin/main is still stranded once deleted. A definition phrased purely
+    as a content comparison is therefore false for every deleted path in the sample list,
+    and the reader cannot tell which branch classified their files. The message must name
+    all three branches: content differs, path absent upstream, uncommitted deletion."""
+    msg = _ctx(monkeypatch, count=14, oldest=9)
+    assert "deletion" in msg, "the unconditional deletion branch must be named"
+    assert "holds nothing there" in msg, "the path-absent-upstream branch must be named"
+
+
 def test_unscannable_repo_is_silent(monkeypatch):
     monkeypatch.setattr(cd, "hygiene_scan", lambda repo=None: None)
     assert cd.hygiene_context({"prompts_seen": 1}) is None
