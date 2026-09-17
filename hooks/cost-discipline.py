@@ -50,8 +50,8 @@ COST_LEDGER_DIR = Path.home() / ".claude" / "cost-ledger"
 # session created it.
 HARNESS_DIR = Path.home() / ".claude"
 HYGIENE_PROMPT_INTERVAL = 10   # check on prompt 1, 11, 21, ...
-HYGIENE_MAX_FILES = 10         # dirty-file count above which we nudge
-HYGIENE_MAX_AGE_DAYS = 7       # oldest dirty-file age above which we nudge
+HYGIENE_MAX_FILES = 10         # stranded-file count above which we nudge
+HYGIENE_MAX_AGE_DAYS = 7       # oldest stranded-file age above which we nudge
 HYGIENE_GIT_TIMEOUT = 3        # seconds — a slow repo must never delay a prompt
 HYGIENE_SAMPLE_COUNT = 3       # how many oldest paths to name in the nudge
 # Session JSONLs live at ~/.claude/projects/<cwd-slug>/<session_id>.jsonl; the slug is
@@ -1758,19 +1758,24 @@ def hygiene_context(state):
 
     reasons = []
     if count > HYGIENE_MAX_FILES:
-        reasons.append(f"{count} uncommitted files (limit {HYGIENE_MAX_FILES})")
+        reasons.append(f"{count} stranded files (limit {HYGIENE_MAX_FILES})")
     if oldest > HYGIENE_MAX_AGE_DAYS:
-        reasons.append(f"oldest dirty {oldest}d (limit {HYGIENE_MAX_AGE_DAYS}d)")
+        reasons.append(f"oldest stranded {oldest}d (limit {HYGIENE_MAX_AGE_DAYS}d)")
     if not reasons:
         return None
 
     listed = ", ".join(f"{p} ({a}d)" for p, a in samples)
     return (
-        f"**Harness hygiene** — `~/.claude` has {' and '.join(reasons)}. This repo is "
-        f"edited from many sessions and rarely exits cleanly, so finished work strands "
-        f"here. Commit what is done, grouped by concern, staging only related paths — "
-        f"never `git add -A`, since the pile may hold another session's work. "
-        f"Oldest: {listed}."
+        f"**Harness hygiene** — `~/.claude` has {' and '.join(reasons)}. Stranded means "
+        f"the path is not reproducible from `origin/main`: its content differs from what "
+        f"`origin/main` holds at that path, or `origin/main` holds nothing there, or it "
+        f"is an uncommitted deletion. A path byte-identical to `origin/main`'s copy at "
+        f"the same path is not counted, so a parked checkout is not dirt. Back each one "
+        f"up. Committing is the usual way: group by "
+        f"concern, stage only related paths, never `git add -A`, since the pile may hold "
+        f"another session's work. Where a path is deliberately unversioned — a live "
+        f"`settings.json`, auto-memory — copy it somewhere durable instead; do not commit "
+        f"it to make this message stop. Oldest: {listed}."
     )
 
 
