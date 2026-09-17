@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.18.2 (2026-09-17)
+
+### Bug Fixes
+
+- **hygiene**: Say stranded, and name the remedy that is not committing
+  ([#68](https://github.com/FreddieMcHeart/claude-core/pull/68),
+  [`c8221d3`](https://github.com/FreddieMcHeart/claude-core/commit/c8221d3f4458028cf3cdce7a891cb49f94b613cd))
+
+- **hygiene**: The definition was false for every deleted path
+  ([#68](https://github.com/FreddieMcHeart/claude-core/pull/68),
+  [`c8221d3`](https://github.com/FreddieMcHeart/claude-core/commit/c8221d3f4458028cf3cdce7a891cb49f94b613cd))
+
+
 ## v0.18.1 (2026-09-15)
 
 ### Bug Fixes
