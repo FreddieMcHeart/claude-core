@@ -239,11 +239,12 @@ measurement taken before your change is not a check on your change.** When a
 superseded reply arrives, say in one line that it was superseded and what it
 cost.
 
-### 5. The pre-compaction knowledge-base check is ALWAYS dispatched
+### 5. The knowledge-base check is ALWAYS dispatched — and it runs at the END OF A WORK BLOCK
 
-Before any compaction, handoff, or end-of-session save, the reconnaissance pass —
-what is genuinely new, which existing page this session advanced or invalidated,
-what the store's conventions are — goes to a sub-agent. Every time.
+When the reconnaissance pass runs — what is genuinely new, which existing page
+this session advanced or invalidated, what the store's conventions are — it goes
+to a sub-agent, as the first action of the step. Never inline. That half has not
+changed.
 
 **It is rule 1's volume argument at the WORST POSSIBLE MOMENT.** The check sweeps
 an entire vault — on the order of a hundred files — to produce about a page of
@@ -251,6 +252,27 @@ answer, landing exactly when the prefix is largest and about to be re-billed int
 a summary. Measured on one such day, cache-read was **96% of every token spent**
 in both rate-limit windows. That makes it the most expensive AND most mechanical
 read in the workflow — the worst thing to keep for yourself.
+
+**WHEN it runs was narrowed 2026-09-20, on a measurement.** n = 40 dispatches
+since 24 June: **1.04 USD each on average** (41.71 USD in total, median 1.06 USD)
+and **164 seconds at the median**, 123 minutes altogether. Not ruinous, and not
+free — a check that makes every parking cost a dollar and three minutes gets
+skipped by skipping the parking, which loses the parking as well as the check. So
+it runs at the END OF A WORK BLOCK: when pages are owed, when the session produced
+findings that belong in the store, or when the operator asks for it. **Not on
+every compaction, handoff or save.** The value is not in doubt — the 2026-09-19
+run produced ten owed findings, all written up and merged the next day.
+
+**The figure is a LOWER BOUND.** 33 of the 40 ran in background mode, where the
+`tool_result` is a launch stub, so the parent-side cost is not in that number at
+all. One method note, because it bit: **group by `message.id` before billing any
+figure read out of a transcript.** A single API response is fanned out across
+several records that each repeat the same `usage`, so summing records read
+threefold high — 3.22 USD against a true 1.04 — with no error anywhere.
+
+**A harness that ships a parking command should make this an explicit mode rather
+than a judgement call.** In ours, `/handoff` is light by default and `/handoff
+--deep` carries this rule.
 
 **The brief must demand three things the obvious version omits:**
 
