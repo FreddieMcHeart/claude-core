@@ -24,12 +24,15 @@ def _usage(inp=0, out=0, cread=0, cwrite=0):
     }
 
 
-def _record(ts, model="claude-opus-5", usage=None, rtype="assistant"):
+def _record(ts, model="claude-opus-5", usage=None, rtype="assistant", msg_id=None):
     """One transcript line in the real shape: usage nested under `message`."""
+    message = {"model": model, "usage": usage if usage is not None else _usage(out=10)}
+    if msg_id is not None:
+        message["id"] = msg_id
     return {
         "type": rtype,
         "timestamp": ts.isoformat().replace("+00:00", "Z"),
-        "message": {"model": model, "usage": usage if usage is not None else _usage(out=10)},
+        "message": message,
     }
 
 
@@ -148,6 +151,49 @@ def test_scan_file_splits_by_model(tmp_path):
     res = rpt.scan_file(path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
     assert res["by_model"]["claude-opus-5"]["output_tokens"] == 3
     assert res["by_model"]["claude-sonnet-5"]["output_tokens"] == 5
+
+
+def test_scan_file_counts_one_response_once_across_its_content_block_lines(tmp_path):
+    """The real shape: one response, three lines, the same usage repeated on each.
+
+    Input and cache fields repeat exactly; output grows, and the last line holds the
+    final figure. Summing lines would count the prompt three times.
+    """
+    lines = [
+        _record(NOW, msg_id="msg_a", usage=_usage(inp=10, out=1, cread=1000, cwrite=50)),
+        _record(NOW, msg_id="msg_a", usage=_usage(inp=10, out=4, cread=1000, cwrite=50)),
+        _record(NOW, msg_id="msg_a", usage=_usage(inp=10, out=9, cread=1000, cwrite=50)),
+    ]
+    path = _transcript(tmp_path, "s", lines)
+    res = rpt.scan_file(path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert res["tokens"] == _usage(inp=10, out=9, cread=1000, cwrite=50)
+    assert res["in_window"] == 1
+    assert res["lines"] == 3
+    assert res["no_id"] == 0
+
+
+def test_scan_file_keeps_distinct_ids_apart_and_counts_lines_without_an_id(tmp_path):
+    path = _transcript(tmp_path, "s", [
+        _record(NOW, msg_id="msg_a", usage=_usage(out=2)),
+        _record(NOW, msg_id="msg_b", usage=_usage(out=3)),
+        _record(NOW, msg_id="msg_a", usage=_usage(out=5)),
+        _record(NOW, usage=_usage(out=7)),
+        _record(NOW, usage=_usage(out=7)),
+    ])
+    res = rpt.scan_file(path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    # msg_a last line 5 + msg_b 3 + two id-less lines counted as they are, 7 + 7
+    assert res["tokens"]["output_tokens"] == 22
+    assert res["in_window"] == 4
+    assert res["no_id"] == 2
+
+
+def test_scan_reports_lines_versus_responses_in_coverage(tmp_path):
+    _transcript(tmp_path, "s", [
+        _record(NOW, msg_id="msg_a", usage=_usage(out=1)),
+        _record(NOW, msg_id="msg_a", usage=_usage(out=2)),
+    ])
+    _, stats = rpt.scan(tmp_path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert (stats["usage_lines"], stats["requests"], stats["no_id"]) == (2, 1, 0)
 
 
 # ---------------------------------------------------------------- scan

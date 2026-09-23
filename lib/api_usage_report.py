@@ -138,6 +138,8 @@ def scan_file(path, since, until):
     identical totals and must not produce identical reports.
     """
     out = {
+        "lines": 0,
+        "no_id": 0,
         "records": 0,
         "in_window": 0,
         "no_timestamp": 0,
@@ -155,6 +157,13 @@ def scan_file(path, since, until):
         out["read_error"] = str(exc)
         return out
 
+    # One API response is written as one line per content block, and every one of
+    # those lines repeats the same ``usage``. Keyed by ``message.id``, the last line
+    # wins: input and cache fields are identical across the repeats and the last
+    # carries the final ``output_tokens``. Same rule as ``cache_report.read_chain``.
+    # A line with no id cannot be matched to its repeats, so it counts once as is.
+    by_id = {}
+    no_id = []
     with handle:
         for line in handle:
             line = line.strip()
@@ -170,32 +179,41 @@ def scan_file(path, since, until):
             message = rec.get("message")
             if not isinstance(message, dict):
                 continue
-            usage = message.get("usage")
-            if not isinstance(usage, dict):
+            if not isinstance(message.get("usage"), dict):
                 continue
+            out["lines"] += 1
+            msg_id = message.get("id")
+            if isinstance(msg_id, str) and msg_id:
+                by_id[msg_id] = rec
+            else:
+                no_id.append(rec)
+    out["no_id"] = len(no_id)
 
-            out["records"] += 1
-            stamp = _parse_ts(rec.get("timestamp"))
-            if stamp is None:
-                out["no_timestamp"] += 1
-                continue
-            if stamp < since or stamp > until:
-                continue
+    for rec in [*by_id.values(), *no_id]:
+        message = rec["message"]
+        usage = message["usage"]
+        out["records"] += 1
+        stamp = _parse_ts(rec.get("timestamp"))
+        if stamp is None:
+            out["no_timestamp"] += 1
+            continue
+        if stamp < since or stamp > until:
+            continue
 
-            fields, multi = usage_tokens(usage)
-            if multi:
-                out["multi_iteration"] += 1
-            out["in_window"] += 1
-            for field, value in fields.items():
-                out["tokens"][field] += value
-            model = message.get("model") or "unknown"
-            bucket = out["by_model"].setdefault(model, {f: 0 for f in TOKEN_FIELDS})
-            for field, value in fields.items():
-                bucket[field] += value
-            if out["first_ts"] is None or stamp < out["first_ts"]:
-                out["first_ts"] = stamp
-            if out["last_ts"] is None or stamp > out["last_ts"]:
-                out["last_ts"] = stamp
+        fields, multi = usage_tokens(usage)
+        if multi:
+            out["multi_iteration"] += 1
+        out["in_window"] += 1
+        for field, value in fields.items():
+            out["tokens"][field] += value
+        model = message.get("model") or "unknown"
+        bucket = out["by_model"].setdefault(model, {f: 0 for f in TOKEN_FIELDS})
+        for field, value in fields.items():
+            bucket[field] += value
+        if out["first_ts"] is None or stamp < out["first_ts"]:
+            out["first_ts"] = stamp
+        if out["last_ts"] is None or stamp > out["last_ts"]:
+            out["last_ts"] = stamp
     return out
 
 
@@ -215,6 +233,9 @@ def scan(projects_dir, since, until):
         "parse_errors": 0,
         "multi_iteration": 0,
         "no_timestamp": 0,
+        "usage_lines": 0,
+        "requests": 0,
+        "no_id": 0,
     }
     root = Path(projects_dir)
     for path in sorted(root.glob("*/*.jsonl")):
@@ -233,6 +254,9 @@ def scan(projects_dir, since, until):
         stats["parse_errors"] += result["parse_errors"]
         stats["multi_iteration"] += result["multi_iteration"]
         stats["no_timestamp"] += result["no_timestamp"]
+        stats["usage_lines"] += result["lines"]
+        stats["requests"] += result["records"]
+        stats["no_id"] += result["no_id"]
         if result["in_window"] == 0:
             continue
         sessions[path.stem] = {
@@ -452,6 +476,11 @@ def format_report(payload):
         f"{cov['parse_errors']} unparseable lines, "
         f"{cov['no_timestamp']} records without a timestamp"
     )
+    if "usage_lines" in cov:
+        lines.append(
+            f"  dedup: {cov['usage_lines']} usage lines -> {cov['requests']} API responses "
+            f"by message.id; {cov['no_id']} line(s) had no id and counted as they are"
+        )
     if cov["multi_iteration"]:
         lines.append(
             f"  {cov['multi_iteration']} record(s) carried more than one usage iteration — "
