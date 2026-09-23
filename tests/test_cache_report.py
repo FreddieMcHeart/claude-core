@@ -204,6 +204,22 @@ def test_cli_text_and_json(tmp_path, capsys):
     assert data[0]["totals"]["write_1h"] == 100
 
 
+def test_read_errors_reach_the_printed_report(tmp_path):
+    # A main file gone between listing and reading, and an unreadable sub-agent
+    # file, must not print as a clean all-zero row.
+    missing = tmp_path / "proj" / "gone.jsonl"
+    ok = _main(tmp_path, "s1", [_line("a", _usage(write=1))])
+    bad_sub = tmp_path / "proj" / "s1" / "subagents" / "agent-bad.jsonl"
+    bad_sub.mkdir(parents=True)  # a directory named *.jsonl cannot be opened as a file
+    text = cr.format_report([cr.session_report(missing), cr.session_report(ok)])
+    assert "unreadable: 1 main transcript(s), 1 sub-agent transcript(s)" in text
+
+
+def test_clean_report_has_no_read_error_line(tmp_path):
+    ok = _main(tmp_path, "s1", [_line("a", _usage(write=1))])
+    assert "unreadable" not in cr.format_report([cr.session_report(ok)])
+
+
 def test_empty_projects_dir(tmp_path, capsys):
     assert cr.main(["--projects", str(tmp_path)]) == 0
     assert "No session transcripts found." in capsys.readouterr().out

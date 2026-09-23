@@ -264,6 +264,12 @@ def format_report(reports):
     lines.append(f"rebuild: cache write >= {REBUILD_RATIO:.0%} of the request's prompt, "
                  "first request of each chain excluded.")
     lines.append(f"deduped by message.id (last line kept); lines with no id, not counted: {no_id}.")
+    # An unreadable file and an empty session print the same zero row, so say which.
+    bad_main = sum(1 for r in reports if r["stats"]["read_error"])
+    bad_sub = sum(r["stats"].get("sub_read_errors", 0) for r in reports)
+    if bad_main or bad_sub:
+        lines.append(f"unreadable: {bad_main} main transcript(s), {bad_sub} sub-agent "
+                     "transcript(s); their rows under-count. See --json for the errors.")
     return "\n".join(lines)
 
 
