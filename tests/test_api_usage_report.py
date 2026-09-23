@@ -187,6 +187,18 @@ def test_scan_file_keeps_distinct_ids_apart_and_counts_lines_without_an_id(tmp_p
     assert res["no_id"] == 2
 
 
+def test_scan_file_windows_a_response_by_its_last_lines_timestamp(tmp_path):
+    """The kept line decides the window, so a response whose lines straddle the start counts."""
+    since = NOW - timedelta(hours=1)
+    path = _transcript(tmp_path, "s", [
+        _record(since - timedelta(seconds=1), msg_id="msg_a", usage=_usage(out=1)),
+        _record(since + timedelta(seconds=1), msg_id="msg_a", usage=_usage(out=8)),
+    ])
+    res = rpt.scan_file(path, since, NOW)
+    assert res["in_window"] == 1
+    assert res["tokens"]["output_tokens"] == 8
+
+
 def test_scan_reports_lines_versus_responses_in_coverage(tmp_path):
     _transcript(tmp_path, "s", [
         _record(NOW, msg_id="msg_a", usage=_usage(out=1)),

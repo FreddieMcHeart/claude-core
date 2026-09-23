@@ -504,8 +504,9 @@ def format_report(payload):
     )
     if "usage_lines" in cov:
         lines.append(
-            f"  dedup: {cov['usage_lines']} usage lines -> {cov['requests']} API responses "
-            f"by message.id; {cov['no_id']} line(s) had no id and counted as they are"
+            f"  dedup, over every scanned file and not only the window: {cov['usage_lines']} "
+            f"usage lines -> {cov['requests']} API responses by message.id; "
+            f"{cov['no_id']} line(s) had no id and counted as they are"
         )
     if cov["multi_iteration"]:
         lines.append(
