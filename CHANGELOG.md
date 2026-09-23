@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.19.0 (2026-09-23)
+
+### Bug Fixes
+
+- **claude-cost-audit**: Cache report names unreadable transcripts
+  ([#70](https://github.com/FreddieMcHeart/claude-core/pull/70),
+  [`efcb20e`](https://github.com/FreddieMcHeart/claude-core/commit/efcb20e3d52b74ff8276fbc77652c382bd5661b9))
+
+### Documentation
+
+- **delegation-discipline**: Narrow rule 5 to the end of a work block
+  ([#69](https://github.com/FreddieMcHeart/claude-core/pull/69),
+  [`4f2dc79`](https://github.com/FreddieMcHeart/claude-core/commit/4f2dc79bf413b827088937ee608a353b6951f6ea))
+
+### Features
+
+- **claude-cost-audit**: Per-session prompt-cache report
+  ([#70](https://github.com/FreddieMcHeart/claude-core/pull/70),
+  [`efcb20e`](https://github.com/FreddieMcHeart/claude-core/commit/efcb20e3d52b74ff8276fbc77652c382bd5661b9))
+
+
 ## v0.18.2 (2026-09-17)
 
 ### Bug Fixes
