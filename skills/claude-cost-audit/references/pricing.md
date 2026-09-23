@@ -17,6 +17,8 @@ changes pricing.
 
 Cache creation = 1.25× input; cache read = 0.10× input.
 
+**The Cache Creation column is the 5-minute write rate. A 1-hour write costs 2× input**, on every model above (Opus 5: 10.00, not 6.25). The TTL is per request, in `usage.cache_creation.ephemeral_1h_input_tokens` / `ephemeral_5m_input_tokens`; on the transcripts measured 2026-09-23 the main chain wrote at 1h and sub-agents at 5m. Source: wiki `brain/claude-core/the-cost-anatomy-of-one-opus-session-2026-09-20` (claude-core-wiki `fc69f96`).
+
 **There is no dated-rate row any more, and the reason is worth keeping.** This table carried
 a Sonnet 5 split — $2/$10 for turns through 2026-08-31, $3/$15 from 2026-09-01 — because the
 $2/$10 was announced as introductory pricing with a scheduled increase. **That increase was

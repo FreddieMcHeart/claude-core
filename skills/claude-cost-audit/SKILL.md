@@ -36,6 +36,16 @@ Tokens are split input / output / cache-read / cache-write because they are not 
 
 It states two limits itself rather than leaving them to the reader. Without `~/.claude/state/rate-limits.json` — written by the status line, the only thing on the machine that receives the harness's window data — the window ends *now* instead of at the real reset, and share-of-limit is not computed. And live sessions append while the scan runs, so two runs minutes apart legitimately differ; the report stamps its own scan time for that reason.
 
+For **prompt-cache writes** per session, run the **cache report**. It reads the main transcript AND the session's `subagents/` transcripts, dedups by `message.id`, and reports cache write (split 1h / 5m), the write share of the session's cost, and cold rebuilds:
+
+```bash
+python lib/cache_report.py                       # newest 10 sessions
+python lib/cache_report.py --session 484f7cf4    # one session by id prefix; repeatable
+python lib/cache_report.py --json
+```
+
+The write share is weighted by price ratios to base input (output 5x, cache read 0.1x, 5-minute write 1.25x, 1-hour write 2x), which are the same on all three current models, so it needs no dollar constant; the report prints its source. A **cold rebuild** is a request whose cache write is at least half its prompt, the chain's first request excluded; sub-agent first writes are counted apart, because every dispatch pays one. On the main chain that threshold sits in a clean gap in the measured data; on sub-agent chains it does not, so their rebuild count is the softer number. `api_usage_report.py` does NOT dedup by `message.id` or read `subagents/` yet, so its cache totals and this report's will disagree — this one is the right one.
+
 For the *other* half — not what cost, but where the discipline itself was worked past — run the **fire-log report**. The hook appends one line per fired nudge to `~/.claude/state/cost-discipline-log.jsonl`; this ranks the rules that fire most and splits warn/info/block:
 
 ```bash
@@ -70,6 +80,9 @@ Metrics are normalised per session (mean/median). Caveat baked into the tool's o
    - Waste patterns from `references/waste-patterns.md`
    - Required report format (see below)
    - "Report in under 400 words"
+   - For the Cache section: run `python lib/cache_report.py --session <id> …` over the same sessions and quote its table as printed. Do NOT recompute cache figures by hand — transcript usage repeats on every content-block line of one response, and summing lines overcounted cache writes 2–3x when measured
+
+   Transcripts carry `message.id`; any per-token sum the worker computes itself must count each id once.
 
 3. **Present the report.** Show the Haiku agent's output to the user. Offer to save to `docs/brain/claude-cost-audit-<YYYY-MM-DD>.md` if the audit contains new learnings.
 
@@ -85,6 +98,9 @@ TOTAL COST: $X.XX
 
 ### Per-Session Breakdown
 (table: session | date | cost | duration | tokens | cache hit | notes)
+
+### Cache
+(the `lib/cache_report.py` table, quoted as printed: cache write 1h/5m, write share, main rebuilds, sub-agent prefix writes)
 
 ### Top 3 Cost Drivers
 (per session: user task, cost, pattern, root cause in one sentence)
