@@ -236,10 +236,19 @@ def scan(projects_dir, since, until):
         "usage_lines": 0,
         "requests": 0,
         "no_id": 0,
+        "subagent_files": 0,
     }
     root = Path(projects_dir)
-    for path in sorted(root.glob("*/*.jsonl")):
+    # A sub-agent writes its own transcript at <project>/<session>/subagents/*.jsonl,
+    # which the ``*/*.jsonl`` glob never reaches. Its requests are billed to the same
+    # limits, so they are folded into the parent session named by the directory.
+    mains = [(p, p.stem, p.parent.name, False) for p in sorted(root.glob("*/*.jsonl"))]
+    subs = [(p, p.parent.parent.name, p.parent.parent.parent.name, True)
+            for p in sorted(root.glob("*/*/subagents/*.jsonl"))]
+    for path, session_id, project, is_sub in mains + subs:
         stats["files_seen"] += 1
+        if is_sub:
+            stats["subagent_files"] += 1
         try:
             mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
         except OSError:
@@ -259,15 +268,29 @@ def scan(projects_dir, since, until):
         stats["no_id"] += result["no_id"]
         if result["in_window"] == 0:
             continue
-        sessions[path.stem] = {
-            "session_id": path.stem,
-            "project": path.parent.name,
-            "records": result["in_window"],
-            "tokens": result["tokens"],
-            "by_model": result["by_model"],
-            "first_ts": result["first_ts"],
-            "last_ts": result["last_ts"],
-        }
+        entry = sessions.setdefault(session_id, {
+            "session_id": session_id,
+            "project": project,
+            "records": 0,
+            "subagent_records": 0,
+            "tokens": {field: 0 for field in TOKEN_FIELDS},
+            "by_model": {},
+            "first_ts": None,
+            "last_ts": None,
+        })
+        entry["records"] += result["in_window"]
+        if is_sub:
+            entry["subagent_records"] += result["in_window"]
+        for field, value in result["tokens"].items():
+            entry["tokens"][field] += value
+        for model, fields in result["by_model"].items():
+            bucket = entry["by_model"].setdefault(model, {f: 0 for f in TOKEN_FIELDS})
+            for field, value in fields.items():
+                bucket[field] += value
+        if entry["first_ts"] is None or result["first_ts"] < entry["first_ts"]:
+            entry["first_ts"] = result["first_ts"]
+        if entry["last_ts"] is None or result["last_ts"] > entry["last_ts"]:
+            entry["last_ts"] = result["last_ts"]
     return sessions, stats
 
 
@@ -356,6 +379,7 @@ def session_rows(sessions, window_total, used_percentage=None, top=15):
             "session_id": entry["session_id"],
             "project": entry["project"],
             "records": entry["records"],
+            "subagent_records": entry.get("subagent_records", 0),
             "tokens": entry["tokens"],
             "total": total,
             "share": share,
@@ -449,6 +473,7 @@ def format_report(payload):
             row["session_id"][:8],
             row["project"][:28],
             str(row["records"]),
+            str(row.get("subagent_records", 0)),
             _human(row["total"]),
             f"{row['share'] * 100:.1f}%",
             "-" if row["pct_points"] is None else f"{row['pct_points']:.1f}",
@@ -456,9 +481,9 @@ def format_report(payload):
         ])
     if rows:
         lines.append(_table(
-            ["session", "project", "msgs", "tokens", "share", "pts", "tok/min"],
+            ["session", "project", "msgs", "of which sub", "tokens", "share", "pts", "tok/min"],
             rows,
-            ["<", "<", ">", ">", ">", ">", ">"],
+            ["<", "<", ">", ">", ">", ">", ">", ">"],
         ))
         lines.append("")
 
@@ -470,7 +495,8 @@ def format_report(payload):
 
     cov = payload["coverage"]
     lines.append(
-        f"coverage: {cov['files_seen']} transcripts seen, "
+        f"coverage: {cov['files_seen']} transcripts seen"
+        f" ({cov.get('subagent_files', 0)} of them sub-agent), "
         f"{cov['files_skipped_mtime']} skipped as older than the window, "
         f"{cov['files_unreadable']} unreadable, "
         f"{cov['parse_errors']} unparseable lines, "

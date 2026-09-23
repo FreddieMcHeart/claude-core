@@ -196,6 +196,52 @@ def test_scan_reports_lines_versus_responses_in_coverage(tmp_path):
     assert (stats["usage_lines"], stats["requests"], stats["no_id"]) == (2, 1, 0)
 
 
+def _sub_transcript(dirp, session_id, agent, records, project="proj"):
+    """A sub-agent transcript where the harness writes it: <project>/<session>/subagents/."""
+    sub = dirp / project / session_id / "subagents"
+    sub.mkdir(parents=True, exist_ok=True)
+    path = sub / f"agent-{agent}.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    return path
+
+
+def test_scan_folds_subagent_transcripts_into_their_parent_session(tmp_path):
+    _transcript(tmp_path, "parent", [_record(NOW, msg_id="m1", usage=_usage(out=10))])
+    _sub_transcript(tmp_path, "parent", "a1", [
+        _record(NOW, msg_id="s1", usage=_usage(out=3, cwrite=100)),
+        _record(NOW, msg_id="s1", usage=_usage(out=4, cwrite=100)),
+    ])
+    _sub_transcript(tmp_path, "parent", "a2", [_record(NOW, msg_id="s2", usage=_usage(out=5))])
+    sessions, stats = rpt.scan(tmp_path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert list(sessions) == ["parent"]
+    entry = sessions["parent"]
+    assert entry["tokens"]["output_tokens"] == 10 + 4 + 5
+    assert entry["tokens"]["cache_creation_input_tokens"] == 100
+    assert (entry["records"], entry["subagent_records"]) == (3, 2)
+    assert (stats["files_seen"], stats["subagent_files"]) == (3, 2)
+
+
+def test_scan_keeps_a_subagent_whose_parent_transcript_is_outside_the_window(tmp_path):
+    """Parent file skipped by mtime must not drop its sub-agents' in-window usage."""
+    parent = _transcript(tmp_path, "parent", [_record(NOW - timedelta(days=9))])
+    stale = (NOW - timedelta(days=9)).timestamp()
+    os.utime(parent, (stale, stale))
+    _sub_transcript(tmp_path, "parent", "a1", [_record(NOW, msg_id="s1", usage=_usage(out=6))])
+    sessions, stats = rpt.scan(tmp_path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert sessions["parent"]["tokens"]["output_tokens"] == 6
+    assert sessions["parent"]["project"] == "proj"
+    assert stats["files_skipped_mtime"] == 1
+
+
+def test_scan_does_not_attribute_one_sessions_subagents_to_another(tmp_path):
+    _transcript(tmp_path, "one", [_record(NOW, msg_id="m1", usage=_usage(out=1))])
+    _transcript(tmp_path, "two", [_record(NOW, msg_id="m2", usage=_usage(out=2))])
+    _sub_transcript(tmp_path, "two", "a1", [_record(NOW, msg_id="s1", usage=_usage(out=40))])
+    sessions, _ = rpt.scan(tmp_path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert sessions["one"]["tokens"]["output_tokens"] == 1
+    assert sessions["two"]["tokens"]["output_tokens"] == 42
+
+
 # ---------------------------------------------------------------- scan
 
 def test_scan_skips_files_older_than_the_window_and_reports_the_count(tmp_path):
