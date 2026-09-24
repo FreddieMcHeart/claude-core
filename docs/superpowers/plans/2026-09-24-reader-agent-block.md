@@ -156,6 +156,9 @@ READS = [
     ("gh --repo o/r pr list", "gh"),
     ("gh search code foo --owner o", "gh"),
     ("gh pr list | head -5", "gh"),
+    ("gh pr list 2>&1 | head -5", "gh"),
+    ("cd repo\ngh pr list", "gh"),
+    ("(cd x && gh pr list)", "gh"),
     ("gh api repos/o/r/pulls", "gh"),
     ("gh api graphql -f query='{ viewer { login } }'", "gh"),
     ("~/.claude/skills/x/pup-ro.sh metrics query q", "pup"),
@@ -185,6 +188,11 @@ NOT_READS = [
     "echo 'kubectl logs x'",
     "cat > f.md <<'EOF'\nkubectl get pods\nEOF",
     "git commit -m wip && gh pr list",
+    # multi-line: each line is a command, a continuation is not a new one
+    "kubectl get pods -n x\nkubectl delete pod y -n x",
+    "gh api repos/o/r/issues \\\n  -f title=x",
+    "gh api repos/o/r/issues \\\n  -X POST",
+    'git commit -m "fix\nkubectl get pods\n"',
     "vault write secret/x a=b",
     "vault read secret/x",
     "vault kv get secret/x",
@@ -410,24 +418,41 @@ _GCLOUD_WRITE_VERBS = frozenset({
 # What vault-dev-read.sh serves. `vault read` / `vault kv get` are deliberately absent:
 # the reader returns key names, never a value, so it would have to refuse them.
 _VAULT_READ_PAIRS = frozenset({("secrets", "list"), ("auth", "list"), ("kv", "list")})
-_SEGMENT_OPERATORS = frozenset({"&&", "||", ";", "|", "&", "|&", ";;", "\n"})
+_PUNCTUATION = "();<>|&\n"
+_BOUNDARY_CHARS = frozenset(";|&\n")
 _ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _is_segment_boundary(tok):
+    """`&&`, `||`, `;`, `|`, `&`, a newline, or a run of them — but not a redirection
+    such as `>&` or `2>&1`'s `>&`, which also consists of punctuation characters."""
+    chars = set(tok)
+    return (chars <= set(_PUNCTUATION) and bool(chars & _BOUNDARY_CHARS)
+            and "<" not in chars and ">" not in chars)
 
 
 def _command_segments(cmd):
     """Simple commands of `cmd`, each a token list. Raises ValueError on bad quoting.
-    A heredoc body is data: everything after the line holding `<<` is dropped."""
+
+    A backslash continuation is joined first, so `gh api x \\` + newline + `-X POST` stays
+    one command. A newline is shlex punctuation, not whitespace, so each line is its own
+    command while a newline inside a quoted argument stays inside that token. Both were
+    found by execution on 2026-09-24: with the newline treated as a word character, a
+    `kubectl get` line swallowed the `kubectl delete` on the next line, and a continuation
+    split `-X POST` into a segment of its own — both blocked a write. A heredoc body is
+    data: everything after the line holding `<<` is dropped."""
+    cmd = cmd.replace("\\\n", " ")
     lines = cmd.split("\n")
     for i, line in enumerate(lines):
         if "<<" in line:
             lines = lines[: i + 1]
             break
-    lex = shlex.shlex("\n".join(lines), posix=True, punctuation_chars=True)
-    lex.whitespace = " \t\r"   # newline stays a token, so each line is its own segment
+    lex = shlex.shlex("\n".join(lines), posix=True, punctuation_chars=_PUNCTUATION)
+    lex.whitespace = " \t\r"
     lex.whitespace_split = True
     seg = []
     for tok in lex:
-        if tok in _SEGMENT_OPERATORS:
+        if _is_segment_boundary(tok):
             if seg:
                 yield seg
             seg = []
@@ -598,7 +623,14 @@ start of the "Reader-agent nudges" section (`~:3463`) through the end of the ref
         # wiki_read_count > 0.
         if _family in ("kubectl", "pup", "slack", "gh") and state.get("wiki_read_count", 0) == 0:
             fire_once(state, "wiki_first",
-                <the existing wiki_first message, unchanged>)
+                "🔍 Wiki check missing. About to run an incident-investigation tool "
+                "(kubectl/pup/slack-cli/gh read), but no wiki Read in this session yet. "
+                "Grep first: `grep -rl '<service-or-symptom>' "
+                f"{_WIKI_PATH}/brain/ "
+                f"{_WIKI_PATH}/platform/services/` — "
+                "then Read the most relevant match. Today's brain entries and "
+                "per-service runbooks often short-circuit hours of debugging. "
+                "Self-disables after the first wiki Read this session.")
 
         # Fallback warning. A read the block did not refuse lands here: kill switch off,
         # Haiku main, or the family's reader not installed. Sub-agent calls pass silently —
@@ -608,7 +640,8 @@ start of the "Reader-agent nudges" section (`~:3463`) through the end of the ref
 ```
 
 Keep the section's header comment, rewritten to say detection is `classify_reader_call`.
-Copy the `wiki_first` message string from the removed block verbatim.
+The `wiki_first` string above is the removed block's, copied verbatim at `b37924d`. If Task 0
+rebased, diff it against the current one.
 
 - [ ] **Step 7: Run the tests**
 
@@ -705,6 +738,9 @@ def test_read_forms_are_blocked(monkeypatch, tmp_path, cmd):
     "kubectl delete configmap top",
     "kubectl rollout restart deploy/x && kubectl get pods",
     "git commit -m wip && gh pr list",
+    "kubectl get pods -n x\nkubectl delete pod y -n x",
+    "gh api repos/o/r/issues \\\n  -f title=x",
+    "gh api repos/o/r/issues \\\n  -X POST",
     "vault read secret/x", "vault kv get secret/x",
 ])
 def test_writes_and_mentions_are_not_blocked(monkeypatch, tmp_path, cmd):
@@ -751,6 +787,7 @@ def test_blocked_call_does_not_move_the_read_counters(monkeypatch, tmp_path, cmd
 
 def test_vault_block_carries_the_dev_only_line(monkeypatch, tmp_path):
     lines, _ = _run(monkeypatch, tmp_path, "vault status")
+    assert _blocks(lines), f"output={lines}"   # an assertion, not an IndexError, on main and A
     assert "vault-reader is DEV-only" in _blocks(lines)[0]["reason"]
 
 
@@ -782,7 +819,8 @@ def test_real_process_emits_exactly_one_block_line(tmp_path):
     lines = [ln for ln in out.splitlines() if ln.strip()]
     assert len(lines) == 1, f"stdout={out!r} stderr={err!r}"
     obj = json.loads(lines[0])
-    assert obj["decision"] == "block" and "gh-reader" in obj["reason"]
+    assert obj.get("decision") == "block", f"stdout={out!r}"   # not a KeyError on main and A
+    assert "gh-reader" in obj["reason"]
 ```
 
 The pid markers are keyed on the child's parent pid, which is this pytest process. That is why
