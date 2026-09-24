@@ -1348,6 +1348,22 @@ def classify_reader_call(cmd):
     return found
 
 
+def reader_block_reason(family, cmd):
+    """Block text for a reader-family read: names only that family's reader and the call.
+    Never mentions the kill switch (see blocks_enabled)."""
+    reader = READER_FOR_FAMILY[family]
+    call = " ".join(cmd.split())[:160]
+    reason = (
+        f"🛑 This is {reader} work — dispatch it instead of running it inline: "
+        f"Agent(subagent_type='{reader}', model='haiku', prompt='RAW: {call}'). "
+        "The reader runs the same read and returns a summary, so the raw output never "
+        "lands in this context. Only this read was refused, and it was not counted.")
+    if family == "vault":
+        reason += (" vault-reader is DEV-only; if this is prod it will refuse — "
+                   "ask the operator instead.")
+    return reason
+
+
 # ---- Reader-reflex table (kubectl / pup / slack / gh / gcloud / vault) ------------
 # The inline-read nudges share one shape: STOP-nudge on first hit, then count
 # repeats and escalate at the 3rd. Detection is classify_reader_call; a new family
@@ -3467,6 +3483,18 @@ def handle_pre_tool(payload):
                 "cat dumps the whole file into context with no line numbers and no range; "
                 "Read gives you offset/limit and peek-first. Transform pipelines "
                 "(cat x | grep y) and heredocs are unaffected.")
+            return
+        # Reader-agent block (fleet #120). Placed BEFORE the counting block on purpose:
+        # the counters commit before the old reflex chain is reached, so a block there
+        # would ratchet the streak on a refused call — a defect this hook has had once.
+        # Returning here also keeps the fallback warning off stdout: one JSON object.
+        _reader_family = classify_reader_call(_bcmd)
+        if (_reader_family and blocks_enabled(payload)
+                and READER_FOR_FAMILY[_reader_family] in reader_roster()[0]):
+            save_state(state)
+            log_fire("block_reader_call", session_id, "block",
+                     family=_reader_family, command=_bcmd[:120])
+            emit_block(reader_block_reason(_reader_family, _bcmd))
             return
         if is_ls_find_as_glob(_bcmd):
             fire_once(state, "bash_ls_find_as_glob",

@@ -241,7 +241,7 @@ def test_known_bash_writes_do_not_touch_the_aggregate(monkeypatch, capsys):
     assert saved["aggregate_reads"] == 10
 
 
-def test_unrecognized_bash_still_counts_toward_the_streak(monkeypatch, capsys):
+def test_unrecognized_bash_still_counts_toward_the_streak(monkeypatch, capsys, tmp_path):
     """The fix must stay content-blind for anything it doesn't recognize as a known
     write — that default is what preserves the Bash(cat)/Bash(ls) read-substitute
     case the streak was written for in the first place."""
@@ -263,6 +263,10 @@ def test_unrecognized_bash_still_counts_toward_the_streak(monkeypatch, capsys):
     assert saved["agent_counters"]["main"]["read_streak"] == 3, \
         "git log is a read, not a write, and must still count"
 
+    # No reader agents installed: with gh-reader present, `gh pr diff` is refused by the
+    # reader-agent block (fleet #120, tested in test_reader_block.py) before it reaches
+    # the counter. Pinning HARNESS_DIR also stops this row depending on ~/.claude/agents.
+    monkeypatch.setattr(cd, "HARNESS_DIR", tmp_path)
     saved = _state(monkeypatch, read_streak=3)
     cd.handle_pre_tool({"session_id": "s1", "tool_name": "Bash",
                         "tool_input": {"command": "gh pr diff 48"}})
