@@ -1,8 +1,8 @@
 # Reader-agent block — design
 
 Date: 2026-09-24. Status: design approved in chat; revised after the adversarial review
-(`2026-09-24-reader-agent-block-design-review-2026-09-24.md`) for findings F1–F5 and F9. The
-other findings are still open.
+(`2026-09-24-reader-agent-block-design-review-2026-09-24.md`) for findings F1–F8, F9 and F10.
+F11–F17 are still open.
 
 ## Problem
 
@@ -11,18 +11,35 @@ When the main session runs a read-only CLI that has a dedicated reader agent
 prices. The hook already detects four such CLIs in `READER_REFLEX` and answers with a
 warning. That warning does not change behaviour, and the reason is measured, not guessed:
 
-| time (UTC, 2026-09-23, session `6efebd28`) | hook output | reached the model? |
-|---|---|---|
-| 17:55:00 | `emit()` warning, oversized tool result | no |
-| 18:44:52 | `emit()` warning, `STOP — dispatch gh-reader` | no |
-| 18:45:12 | `emit()` warning, third inline gh read | no |
-| 18:41:03 | publication-gate `deny` | yes, as the tool error |
+| time (UTC, 2026-09-23, session `6efebd28`) | event | hook output | reached the model? |
+|---|---|---|---|
+| 18:44:52 | `PreToolUse:Bash` | `emit()` warning, `STOP — dispatch gh-reader` | no |
+| 18:45:12 | `PreToolUse:Bash` | `emit()` warning, third inline gh read | no |
+| 17:55:00 | `PostToolUse:Read` | `emit()` warning, oversized tool result | no — a different event, not evidence for PreToolUse |
 
-All four are recorded in the transcript as `attachment/hook_system_message`; only the deny
-was in the model's context. n=3 warnings in one session, checked against the model's own
-context. So `emit()` → `{"systemMessage": …}` on `PreToolUse` reaches the UI and not the
-model, while a block's reason does reach it. The warn tier's delivery is tracked separately
-(fleet #121) and is out of scope here.
+**The warning half:** n=2 `PreToolUse` warnings in one session. Both are recorded as
+`attachment/hook_system_message`; neither was in the model's context, and in both cases the
+gh output arrived as a normal tool result straight after. So `emit()` → `{"systemMessage": …}`
+on `PreToolUse` reaches the UI and not the model. The warn tier's delivery is tracked
+separately (fleet #121) and is out of scope here.
+
+**The block half, for the emitter this design actually uses.** `emit_block` writes the legacy
+top-level `{"decision":"block","reason":…}` (`hooks/cost-discipline.py:935-938`). Its existing
+callers are the streak and aggregate blocks, whose reason starts `Read-discipline hard-block`.
+Counted 2026-09-24 over every `*.jsonl` under `~/.claude/projects/` (8,381 files): **1,278
+`tool_result` blocks with `is_error` carry that text, in 333 files**, the latest at
+2026-09-24T13:58:22Z, 5 of them in session `6efebd28` itself. The reason reaches the model as
+the tool error. The count is of transcript records, not unique events. Copied and resumed
+transcripts are not deduplicated, so it shows that delivery happens, not how often. Method: parse every line; for each
+`message.content[]` block with `type == "tool_result"` and `is_error` true, count it if its
+content contains the needle above.
+
+The publication-gate deny at 18:41:03 also reached the model as a tool error. But it comes
+from a different hook with a different envelope
+(`hookSpecificOutput.permissionDecision: "deny"`, `~/.claude/hooks/publication-gate.py:1103-1125`),
+so it is not the evidence for `emit_block`. The legacy envelope is deprecated upstream and is
+honoured today. If it stops being honoured, the streak and aggregate blocks break with it, and
+the fix belongs to all three callers at once. It is not a reason to fork this one now.
 
 ## Decision
 
@@ -46,7 +63,7 @@ frontmatter (a new contract across eight files for a ninth agent that does not e
 | `gh` | `gh-reader` | `is_gh_read` subjects × `view`, `list`, `diff`, `checks`, `status`; plus `search code`; plus `api` only as a GET (below) |
 | `pup` | `datadog-reader` | existing pup-ro detection |
 | `slack-cli.sh` | `slack-reader` | existing read subcommands |
-| `gcloud` | `gcloud-reader` | NEW: `list`, `describe`, `get-iam-policy`, `logging read`, `config list`, `auth list`, `asset search-all-resources` |
+| `gcloud` | `gcloud-reader` | NEW: the final verb `list`, `describe` or `get-iam-policy` in any group (so `logging logs list`, `logging buckets list`, `logging sinks list\|describe`, `projects list\|describe`, `services list`, `auth list`, `config list`); plus `logging read`, `config get-value`, `asset search-all-resources` |
 | `vault` | `vault-reader` | NEW: `status`, `secrets list`, `auth list`, `list`, `kv list` |
 
 Where the read sets come from:
@@ -56,9 +73,9 @@ Where the read sets come from:
   `vault kv get` are deliberately NOT in the set: the reader returns key names and never a
   value (`vault-reader.md:90-91`), so blocking a value read would route it to an agent that
   must refuse it. Those calls pass.
-- **gcloud** — a subset of the allowed shapes in `gcloud-reader.md`'s Hard boundaries. The
-  subset is known to be incomplete (for example `config get-value`); review finding F10, still
-  open.
+- **gcloud** — the allowed shapes in `gcloud-reader.md:15` (Hard boundaries), not the
+  frontmatter description, which names none of them. `--help` is left out: it prints usage and
+  touches no cloud state, so there is nothing to delegate.
 
 ### Family → reader map
 
@@ -116,8 +133,13 @@ carries two classifiers for the same commands (the reason a separate hook was re
 - vault value reads: `vault read`, `vault kv get` — the reader cannot return a value
 - a command that only mentions a CLI in an argument, a quoted string or a heredoc body
 - a family whose reader agent is not installed — blocking toward a missing agent is a dead end
-- `CC_DISCIPLINE_BLOCK=0` — the existing advisory-only switch, which falls back to today's
-  warning. As today, the block text does not mention it
+
+**Kill switch, which does not pass silently:** with `CC_DISCIPLINE_BLOCK=0` (the existing
+advisory-only switch) no call is blocked. A read the classifier would have blocked gets the
+`READER_REFLEX` warning instead, which is today's behaviour. `READER_REFLEX` gains `gcloud` and
+`vault` entries, whose text matches their block reason, so all six families fall back the same
+way. That warning does not reach the model (fleet #121), so in practice the switch means
+"advise only". As today, the block text does not mention the switch.
 
 **Block reason:** names the agent and the call, e.g.
 `this is gh-reader work — Agent(subagent_type='gh-reader', model='haiku', prompt=…)`.
@@ -152,14 +174,29 @@ harness-shaped payloads on stdin, following `tests/test_read_block_tier.py`:
 | `kubectl --context=x -n ns get pods` | block |
 | `cd ~/repo && gh pr list`, `GH_REPO=o/r gh pr list`, `gh -R o/r pr view 5`, `gh --repo o/r pr list`, `gh search code foo --owner o` | block |
 | `vault read secret/x`, `vault kv get secret/x` | no block |
+| `gcloud config get-value project`, `gcloud logging logs list`, `gcloud services list`, `gcloud projects describe p` | block |
+| `gcloud --help`, `gcloud run deploy x`, `gcloud services enable x` | no block |
+| `CC_DISCIPLINE_BLOCK=0` with a `gcloud` and a `vault` read | a warning, no `decision` |
 | reader file absent (temp agents dir), per family (6), `pup` via `datadog-reader.md` | no block |
 | `CC_DISCIPLINE_BLOCK=0` | no block |
 | blocked call per family (6), then state read back | streak and aggregate unchanged |
 | `vault` block | reason carries the DEV-only line |
 
-Three arms: the finished tests against `origin/main` (expect the six block cases red for
-the right reason, a warning in place of a block), against the branch, and cases that pass in
-both reported separately.
+Three arms: the finished tests against `origin/main`, against the branch, and cases that pass
+in both reported separately. What `origin/main` must show for each block case, and why each
+reason is the right one:
+
+| block case on `origin/main` | expected output | why |
+|---|---|---|
+| bare reads of `kubectl`, `gh`, `pup`, `slack-cli.sh` | a warning, no `decision` | detection exists and warns |
+| `gcloud` and `vault` reads | nothing at all | no detection on main |
+| `cd … && gh …`, `GH_REPO=… gh …`, `gh -R/--repo …`, `gh search code` | nothing at all | today's gh detection reads the first token only |
+
+A case that fails on main for any other reason (an import error, a crash) is not evidence.
+The "no block" rows mostly pass on both arms. They guard the change and are reported
+separately. The exception is the rows today's detectors mis-flag (`gh api -X POST`,
+`git commit -m "… kubectl get pods"`, `kubectl delete configmap top`): these produce a warning
+on main and no block on the branch, so both arms show no block.
 
 Real artifact: after install, one real `gh pr list` from a live main session must come back
 as a tool error carrying the reason. That is the delivery proof the warn tier never had.
