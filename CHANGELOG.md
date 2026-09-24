@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.19.1 (2026-09-24)
+
+### Bug Fixes
+
+- **api-usage**: Count each API response once, by message.id
+  ([#71](https://github.com/FreddieMcHeart/claude-core/pull/71),
+  [`60f18b0`](https://github.com/FreddieMcHeart/claude-core/commit/60f18b0c8a27542ac9d0ae542f4c31f3cd991573))
+
+- **api-usage**: Count each response once and include sub-agents
+  ([#71](https://github.com/FreddieMcHeart/claude-core/pull/71),
+  [`60f18b0`](https://github.com/FreddieMcHeart/claude-core/commit/60f18b0c8a27542ac9d0ae542f4c31f3cd991573))
+
+- **api-usage**: Include sub-agent transcripts in window totals
+  ([#71](https://github.com/FreddieMcHeart/claude-core/pull/71),
+  [`60f18b0`](https://github.com/FreddieMcHeart/claude-core/commit/60f18b0c8a27542ac9d0ae542f4c31f3cd991573))
+
+- **api-usage**: Name the populations the review found unstated
+  ([#71](https://github.com/FreddieMcHeart/claude-core/pull/71),
+  [`60f18b0`](https://github.com/FreddieMcHeart/claude-core/commit/60f18b0c8a27542ac9d0ae542f4c31f3cd991573))
+
+
 ## v0.19.0 (2026-09-23)
 
 ### Bug Fixes
