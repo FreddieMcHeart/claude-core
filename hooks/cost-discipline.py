@@ -1159,8 +1159,8 @@ _CLI_FAMILY = {
     "slack-cli.sh": "slack", "gcloud": "gcloud", "vault": "vault",
 }
 # Global flags that take a separate value, per family. `--flag=value` is one token and
-# needs no entry. An unlisted value flag puts its value in the verb slot, which reads as
-# a non-read and passes — the fail-open direction.
+# needs no entry. The token after an UNLISTED flag may be that flag's value, so
+# _positionals marks it unsure and it can never decide a read (the fail-open direction).
 _VALUE_FLAGS = {
     "kubectl": frozenset({"-n", "--namespace", "--context", "--kubeconfig"}),
     "gh": frozenset({"-R", "--repo"}),
@@ -1253,14 +1253,23 @@ def _command_start(seg):
 
 
 def _positionals(family, args):
-    """Non-flag tokens of `args`, skipping the value of each value-taking flag."""
-    out, i, value_flags = [], 0, _VALUE_FLAGS[family]
+    """(token, sure) for each non-flag token of `args`, skipping the value of each listed
+    value-taking flag. A token right after an UNLISTED flag without `=` is not sure: it may
+    be that flag's value. Found by review on 2026-09-24 and reproduced: with it taken as a
+    positional, `kubectl --field-selector logs delete pod x` read `logs` as the verb and
+    the delete was refused."""
+    out, i, value_flags, sure = [], 0, _VALUE_FLAGS[family], True
     while i < len(args):
         tok = args[i]
         if tok.startswith("-"):
-            i += 2 if tok in value_flags else 1
+            if tok in value_flags:
+                i += 2
+            else:
+                sure = "=" in tok
+                i += 1
             continue
-        out.append(tok)
+        out.append((tok, sure))
+        sure = True
         i += 1
     return out
 
@@ -1295,7 +1304,8 @@ def _is_reader_read(family, args):
         return False
     if family == "pup":
         return True   # pup-ro.sh is read-only by construction
-    pos = _positionals(family, args)
+    marked = _positionals(family, args)
+    pos = [tok if sure else None for tok, sure in marked]   # an unsure token matches nothing
     if family == "kubectl":
         return bool(pos) and pos[0] in _KUBECTL_READ_VERBS
     if family == "gh":
@@ -1309,11 +1319,13 @@ def _is_reader_read(family, args):
     if family == "gcloud":
         if tuple(pos[:2]) in _GCLOUD_READ_PREFIXES:
             return True
-        for tok in pos:
-            if tok in _GCLOUD_READ_VERBS:
-                return True
+        # The scan uses the raw token so an unsure write verb still counts as a write;
+        # an unsure read verb decides nothing.
+        for tok, sure in marked:
             if tok in _GCLOUD_WRITE_VERBS:
                 return False
+            if tok in _GCLOUD_READ_VERBS:
+                return sure
         return False
     if family == "vault":
         return pos[:1] in (["status"], ["list"]) or tuple(pos[:2]) in _VAULT_READ_PAIRS

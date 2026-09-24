@@ -156,6 +156,8 @@ def test_read_forms_are_blocked(monkeypatch, tmp_path, cmd):
     "gh api repos/o/r/issues \\\n  -f title=x",
     "gh api repos/o/r/issues \\\n  -X POST",
     "vault read secret/x", "vault kv get secret/x",
+    "kubectl --field-selector logs delete pod mypod",
+    "gcloud --filter list compute instances delete vm1",
 ])
 def test_writes_and_mentions_are_not_blocked(monkeypatch, tmp_path, cmd):
     lines, _ = _run(monkeypatch, tmp_path, cmd)

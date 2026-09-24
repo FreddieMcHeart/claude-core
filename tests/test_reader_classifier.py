@@ -43,6 +43,9 @@ READS = [
     ("vault status", "vault"),
     ("vault kv list secret/", "vault"),
     ("vault -address=https://x secrets list", "vault"),
+    # an unlisted flag before the verb: its value is set aside, the real verb still reads
+    ("gcloud --verbosity debug projects list", "gcloud"),
+    ("kubectl get pods -l app=x", "kubectl"),
 ]
 
 NOT_READS = [
@@ -73,6 +76,13 @@ NOT_READS = [
     "gcloud services list --help",
     "gcloud container clusters get-credentials c --region r",
     "~/.claude/scripts/slack-cli.sh send C1 hi",
+    # review 2026-09-24: the value of an unlisted flag must never be taken for the read verb
+    "kubectl --field-selector logs delete pod mypod",
+    "kubectl -l get delete pods",
+    "gcloud --filter list compute instances delete vm1 --zone=us-central1-a",
+    "gcloud compute instances --quiet delete list",
+    "vault -tls-server-name list write secret/x a=b",
+    "~/.claude/scripts/slack-cli.sh --workspace history send C1 hi",
     "git status",
     "echo 'unbalanced",
     "",
