@@ -36,6 +36,8 @@ Tokens are split input / output / cache-read / cache-write because they are not 
 
 It states two limits itself rather than leaving them to the reader. Without `~/.claude/state/rate-limits.json` — written by the status line, the only thing on the machine that receives the harness's window data — the window ends *now* instead of at the real reset, and share-of-limit is not computed. And live sessions append while the scan runs, so two runs minutes apart legitimately differ; the report stamps its own scan time for that reason.
 
+It counts each API response once, by `message.id`: the transcript writes one line per content block and repeats the same `usage` on each, and summing lines over-counted a 7-day window 2.08x when this was fixed (2026-09-23). Sub-agent transcripts under `<session>/subagents/` are folded into their parent session; they added 18% to the same window. Figures from this report dated before that fix are too high and too narrow at once — do not compare across it.
+
 For **prompt-cache writes** per session, run the **cache report**. It reads the main transcript AND the session's `subagents/` transcripts, dedups by `message.id`, and reports cache write (split 1h / 5m), the write share of the session's cost, and cold rebuilds:
 
 ```bash
@@ -44,7 +46,7 @@ python lib/cache_report.py --session 484f7cf4    # one session by id prefix; rep
 python lib/cache_report.py --json
 ```
 
-The write share is weighted by price ratios to base input (output 5x, cache read 0.1x, 5-minute write 1.25x, 1-hour write 2x), which are the same on all three current models, so it needs no dollar constant; the report prints its source. A **cold rebuild** is a request whose cache write is at least half its prompt, the chain's first request excluded; sub-agent first writes are counted apart, because every dispatch pays one. On the main chain that threshold sits in a clean gap in the measured data; on sub-agent chains it does not, so their rebuild count is the softer number. `api_usage_report.py` does NOT dedup by `message.id` or read `subagents/` yet, so its cache totals and this report's will disagree — this one is the right one.
+The write share is weighted by price ratios to base input (output 5x, cache read 0.1x, 5-minute write 1.25x, 1-hour write 2x), which are the same on all three current models, so it needs no dollar constant; the report prints its source. A **cold rebuild** is a request whose cache write is at least half its prompt, the chain's first request excluded; sub-agent first writes are counted apart, because every dispatch pays one. On the main chain that threshold sits in a clean gap in the measured data; on sub-agent chains it does not, so their rebuild count is the softer number. Both reports count each `message.id` once and include `subagents/`, so for a session that lies wholly inside the `api_usage_report.py` window their cache totals agree. This report has no window, so a session straddling the window start shows more here.
 
 For the *other* half — not what cost, but where the discipline itself was worked past — run the **fire-log report**. The hook appends one line per fired nudge to `~/.claude/state/cost-discipline-log.jsonl`; this ranks the rules that fire most and splits warn/info/block:
 

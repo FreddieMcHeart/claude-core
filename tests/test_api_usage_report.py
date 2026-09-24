@@ -24,12 +24,15 @@ def _usage(inp=0, out=0, cread=0, cwrite=0):
     }
 
 
-def _record(ts, model="claude-opus-5", usage=None, rtype="assistant"):
+def _record(ts, model="claude-opus-5", usage=None, rtype="assistant", msg_id=None):
     """One transcript line in the real shape: usage nested under `message`."""
+    message = {"model": model, "usage": usage if usage is not None else _usage(out=10)}
+    if msg_id is not None:
+        message["id"] = msg_id
     return {
         "type": rtype,
         "timestamp": ts.isoformat().replace("+00:00", "Z"),
-        "message": {"model": model, "usage": usage if usage is not None else _usage(out=10)},
+        "message": message,
     }
 
 
@@ -148,6 +151,107 @@ def test_scan_file_splits_by_model(tmp_path):
     res = rpt.scan_file(path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
     assert res["by_model"]["claude-opus-5"]["output_tokens"] == 3
     assert res["by_model"]["claude-sonnet-5"]["output_tokens"] == 5
+
+
+def test_scan_file_counts_one_response_once_across_its_content_block_lines(tmp_path):
+    """The real shape: one response, three lines, the same usage repeated on each.
+
+    Input and cache fields repeat exactly; output grows, and the last line holds the
+    final figure. Summing lines would count the prompt three times.
+    """
+    lines = [
+        _record(NOW, msg_id="msg_a", usage=_usage(inp=10, out=1, cread=1000, cwrite=50)),
+        _record(NOW, msg_id="msg_a", usage=_usage(inp=10, out=4, cread=1000, cwrite=50)),
+        _record(NOW, msg_id="msg_a", usage=_usage(inp=10, out=9, cread=1000, cwrite=50)),
+    ]
+    path = _transcript(tmp_path, "s", lines)
+    res = rpt.scan_file(path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert res["tokens"] == _usage(inp=10, out=9, cread=1000, cwrite=50)
+    assert res["in_window"] == 1
+    assert res["lines"] == 3
+    assert res["no_id"] == 0
+
+
+def test_scan_file_keeps_distinct_ids_apart_and_counts_lines_without_an_id(tmp_path):
+    path = _transcript(tmp_path, "s", [
+        _record(NOW, msg_id="msg_a", usage=_usage(out=2)),
+        _record(NOW, msg_id="msg_b", usage=_usage(out=3)),
+        _record(NOW, msg_id="msg_a", usage=_usage(out=5)),
+        _record(NOW, usage=_usage(out=7)),
+        _record(NOW, usage=_usage(out=7)),
+    ])
+    res = rpt.scan_file(path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    # msg_a last line 5 + msg_b 3 + two id-less lines counted as they are, 7 + 7
+    assert res["tokens"]["output_tokens"] == 22
+    assert res["in_window"] == 4
+    assert res["no_id"] == 2
+
+
+def test_scan_file_windows_a_response_by_its_last_lines_timestamp(tmp_path):
+    """The kept line decides the window, so a response whose lines straddle the start counts."""
+    since = NOW - timedelta(hours=1)
+    path = _transcript(tmp_path, "s", [
+        _record(since - timedelta(seconds=1), msg_id="msg_a", usage=_usage(out=1)),
+        _record(since + timedelta(seconds=1), msg_id="msg_a", usage=_usage(out=8)),
+    ])
+    res = rpt.scan_file(path, since, NOW)
+    assert res["in_window"] == 1
+    assert res["tokens"]["output_tokens"] == 8
+
+
+def test_scan_reports_lines_versus_responses_in_coverage(tmp_path):
+    _transcript(tmp_path, "s", [
+        _record(NOW, msg_id="msg_a", usage=_usage(out=1)),
+        _record(NOW, msg_id="msg_a", usage=_usage(out=2)),
+    ])
+    _, stats = rpt.scan(tmp_path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert (stats["usage_lines"], stats["requests"], stats["no_id"]) == (2, 1, 0)
+
+
+def _sub_transcript(dirp, session_id, agent, records, project="proj"):
+    """A sub-agent transcript where the harness writes it: <project>/<session>/subagents/."""
+    sub = dirp / project / session_id / "subagents"
+    sub.mkdir(parents=True, exist_ok=True)
+    path = sub / f"agent-{agent}.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    return path
+
+
+def test_scan_folds_subagent_transcripts_into_their_parent_session(tmp_path):
+    _transcript(tmp_path, "parent", [_record(NOW, msg_id="m1", usage=_usage(out=10))])
+    _sub_transcript(tmp_path, "parent", "a1", [
+        _record(NOW, msg_id="s1", usage=_usage(out=3, cwrite=100)),
+        _record(NOW, msg_id="s1", usage=_usage(out=4, cwrite=100)),
+    ])
+    _sub_transcript(tmp_path, "parent", "a2", [_record(NOW, msg_id="s2", usage=_usage(out=5))])
+    sessions, stats = rpt.scan(tmp_path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert list(sessions) == ["parent"]
+    entry = sessions["parent"]
+    assert entry["tokens"]["output_tokens"] == 10 + 4 + 5
+    assert entry["tokens"]["cache_creation_input_tokens"] == 100
+    assert (entry["records"], entry["subagent_records"]) == (3, 2)
+    assert (stats["files_seen"], stats["subagent_files"]) == (3, 2)
+
+
+def test_scan_keeps_a_subagent_whose_parent_transcript_is_outside_the_window(tmp_path):
+    """Parent file skipped by mtime must not drop its sub-agents' in-window usage."""
+    parent = _transcript(tmp_path, "parent", [_record(NOW - timedelta(days=9))])
+    stale = (NOW - timedelta(days=9)).timestamp()
+    os.utime(parent, (stale, stale))
+    _sub_transcript(tmp_path, "parent", "a1", [_record(NOW, msg_id="s1", usage=_usage(out=6))])
+    sessions, stats = rpt.scan(tmp_path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert sessions["parent"]["tokens"]["output_tokens"] == 6
+    assert sessions["parent"]["project"] == "proj"
+    assert stats["files_skipped_mtime"] == 1
+
+
+def test_scan_does_not_attribute_one_sessions_subagents_to_another(tmp_path):
+    _transcript(tmp_path, "one", [_record(NOW, msg_id="m1", usage=_usage(out=1))])
+    _transcript(tmp_path, "two", [_record(NOW, msg_id="m2", usage=_usage(out=2))])
+    _sub_transcript(tmp_path, "two", "a1", [_record(NOW, msg_id="s1", usage=_usage(out=40))])
+    sessions, _ = rpt.scan(tmp_path, NOW - timedelta(hours=1), NOW + timedelta(hours=1))
+    assert sessions["one"]["tokens"]["output_tokens"] == 1
+    assert sessions["two"]["tokens"]["output_tokens"] == 42
 
 
 # ---------------------------------------------------------------- scan

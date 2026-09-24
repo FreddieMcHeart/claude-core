@@ -138,6 +138,8 @@ def scan_file(path, since, until):
     identical totals and must not produce identical reports.
     """
     out = {
+        "lines": 0,
+        "no_id": 0,
         "records": 0,
         "in_window": 0,
         "no_timestamp": 0,
@@ -155,6 +157,13 @@ def scan_file(path, since, until):
         out["read_error"] = str(exc)
         return out
 
+    # One API response is written as one line per content block, and every one of
+    # those lines repeats the same ``usage``. Keyed by ``message.id``, the last line
+    # wins: input and cache fields are identical across the repeats and the last
+    # carries the final ``output_tokens``. Same rule as ``cache_report.read_chain``.
+    # A line with no id cannot be matched to its repeats, so it counts once as is.
+    by_id = {}
+    no_id = []
     with handle:
         for line in handle:
             line = line.strip()
@@ -170,32 +179,41 @@ def scan_file(path, since, until):
             message = rec.get("message")
             if not isinstance(message, dict):
                 continue
-            usage = message.get("usage")
-            if not isinstance(usage, dict):
+            if not isinstance(message.get("usage"), dict):
                 continue
+            out["lines"] += 1
+            msg_id = message.get("id")
+            if isinstance(msg_id, str) and msg_id:
+                by_id[msg_id] = rec
+            else:
+                no_id.append(rec)
+    out["no_id"] = len(no_id)
 
-            out["records"] += 1
-            stamp = _parse_ts(rec.get("timestamp"))
-            if stamp is None:
-                out["no_timestamp"] += 1
-                continue
-            if stamp < since or stamp > until:
-                continue
+    for rec in [*by_id.values(), *no_id]:
+        message = rec["message"]
+        usage = message["usage"]
+        out["records"] += 1
+        stamp = _parse_ts(rec.get("timestamp"))
+        if stamp is None:
+            out["no_timestamp"] += 1
+            continue
+        if stamp < since or stamp > until:
+            continue
 
-            fields, multi = usage_tokens(usage)
-            if multi:
-                out["multi_iteration"] += 1
-            out["in_window"] += 1
-            for field, value in fields.items():
-                out["tokens"][field] += value
-            model = message.get("model") or "unknown"
-            bucket = out["by_model"].setdefault(model, {f: 0 for f in TOKEN_FIELDS})
-            for field, value in fields.items():
-                bucket[field] += value
-            if out["first_ts"] is None or stamp < out["first_ts"]:
-                out["first_ts"] = stamp
-            if out["last_ts"] is None or stamp > out["last_ts"]:
-                out["last_ts"] = stamp
+        fields, multi = usage_tokens(usage)
+        if multi:
+            out["multi_iteration"] += 1
+        out["in_window"] += 1
+        for field, value in fields.items():
+            out["tokens"][field] += value
+        model = message.get("model") or "unknown"
+        bucket = out["by_model"].setdefault(model, {f: 0 for f in TOKEN_FIELDS})
+        for field, value in fields.items():
+            bucket[field] += value
+        if out["first_ts"] is None or stamp < out["first_ts"]:
+            out["first_ts"] = stamp
+        if out["last_ts"] is None or stamp > out["last_ts"]:
+            out["last_ts"] = stamp
     return out
 
 
@@ -215,10 +233,22 @@ def scan(projects_dir, since, until):
         "parse_errors": 0,
         "multi_iteration": 0,
         "no_timestamp": 0,
+        "usage_lines": 0,
+        "requests": 0,
+        "no_id": 0,
+        "subagent_files": 0,
     }
     root = Path(projects_dir)
-    for path in sorted(root.glob("*/*.jsonl")):
+    # A sub-agent writes its own transcript at <project>/<session>/subagents/*.jsonl,
+    # which the ``*/*.jsonl`` glob never reaches. Its requests are billed to the same
+    # limits, so they are folded into the parent session named by the directory.
+    mains = [(p, p.stem, p.parent.name, False) for p in sorted(root.glob("*/*.jsonl"))]
+    subs = [(p, p.parent.parent.name, p.parent.parent.parent.name, True)
+            for p in sorted(root.glob("*/*/subagents/*.jsonl"))]
+    for path, session_id, project, is_sub in mains + subs:
         stats["files_seen"] += 1
+        if is_sub:
+            stats["subagent_files"] += 1
         try:
             mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
         except OSError:
@@ -233,17 +263,34 @@ def scan(projects_dir, since, until):
         stats["parse_errors"] += result["parse_errors"]
         stats["multi_iteration"] += result["multi_iteration"]
         stats["no_timestamp"] += result["no_timestamp"]
+        stats["usage_lines"] += result["lines"]
+        stats["requests"] += result["records"]
+        stats["no_id"] += result["no_id"]
         if result["in_window"] == 0:
             continue
-        sessions[path.stem] = {
-            "session_id": path.stem,
-            "project": path.parent.name,
-            "records": result["in_window"],
-            "tokens": result["tokens"],
-            "by_model": result["by_model"],
-            "first_ts": result["first_ts"],
-            "last_ts": result["last_ts"],
-        }
+        entry = sessions.setdefault(session_id, {
+            "session_id": session_id,
+            "project": project,
+            "records": 0,
+            "subagent_records": 0,
+            "tokens": {field: 0 for field in TOKEN_FIELDS},
+            "by_model": {},
+            "first_ts": None,
+            "last_ts": None,
+        })
+        entry["records"] += result["in_window"]
+        if is_sub:
+            entry["subagent_records"] += result["in_window"]
+        for field, value in result["tokens"].items():
+            entry["tokens"][field] += value
+        for model, fields in result["by_model"].items():
+            bucket = entry["by_model"].setdefault(model, {f: 0 for f in TOKEN_FIELDS})
+            for field, value in fields.items():
+                bucket[field] += value
+        if entry["first_ts"] is None or result["first_ts"] < entry["first_ts"]:
+            entry["first_ts"] = result["first_ts"]
+        if entry["last_ts"] is None or result["last_ts"] > entry["last_ts"]:
+            entry["last_ts"] = result["last_ts"]
     return sessions, stats
 
 
@@ -332,6 +379,7 @@ def session_rows(sessions, window_total, used_percentage=None, top=15):
             "session_id": entry["session_id"],
             "project": entry["project"],
             "records": entry["records"],
+            "subagent_records": entry.get("subagent_records", 0),
             "tokens": entry["tokens"],
             "total": total,
             "share": share,
@@ -425,6 +473,7 @@ def format_report(payload):
             row["session_id"][:8],
             row["project"][:28],
             str(row["records"]),
+            str(row.get("subagent_records", 0)),
             _human(row["total"]),
             f"{row['share'] * 100:.1f}%",
             "-" if row["pct_points"] is None else f"{row['pct_points']:.1f}",
@@ -432,9 +481,9 @@ def format_report(payload):
         ])
     if rows:
         lines.append(_table(
-            ["session", "project", "msgs", "tokens", "share", "pts", "tok/min"],
+            ["session", "project", "msgs", "of which sub", "tokens", "share", "pts", "tok/min"],
             rows,
-            ["<", "<", ">", ">", ">", ">", ">"],
+            ["<", "<", ">", ">", ">", ">", ">", ">"],
         ))
         lines.append("")
 
@@ -446,12 +495,19 @@ def format_report(payload):
 
     cov = payload["coverage"]
     lines.append(
-        f"coverage: {cov['files_seen']} transcripts seen, "
+        f"coverage: {cov['files_seen']} transcripts seen"
+        f" ({cov.get('subagent_files', 0)} of them sub-agent), "
         f"{cov['files_skipped_mtime']} skipped as older than the window, "
         f"{cov['files_unreadable']} unreadable, "
         f"{cov['parse_errors']} unparseable lines, "
         f"{cov['no_timestamp']} records without a timestamp"
     )
+    if "usage_lines" in cov:
+        lines.append(
+            f"  dedup, over every scanned file and not only the window: {cov['usage_lines']} "
+            f"usage lines -> {cov['requests']} API responses by message.id; "
+            f"{cov['no_id']} line(s) had no id and counted as they are"
+        )
     if cov["multi_iteration"]:
         lines.append(
             f"  {cov['multi_iteration']} record(s) carried more than one usage iteration — "
