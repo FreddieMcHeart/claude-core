@@ -1,8 +1,8 @@
 # Reader-agent block — design
 
 Date: 2026-09-24. Status: design approved in chat; revised after the adversarial review
-(`2026-09-24-reader-agent-block-design-review-2026-09-24.md`) for findings F1–F8, F9 and F10.
-F11–F17 are still open.
+(`2026-09-24-reader-agent-block-design-review-2026-09-24.md`) for all seventeen findings
+(F1–F17).
 
 ## Problem
 
@@ -52,7 +52,10 @@ frontmatter (a new contract across eight files for a ninth agent that does not e
 
 **Blocked, from the first call:** a `PreToolUse` `Bash` call where
 
-1. `is_subagent_call(payload)` is false (main session), and
+1. `blocks_enabled(payload)` is true — the same gate the streak and aggregate blocks use
+   (`hooks/cost-discipline.py:985-1014`): kill switch off, not a sub-agent
+   (`is_subagent_call`), and the main model is not Haiku. Blocking a Haiku main into a Haiku
+   reader buys nothing and costs a turn; and
 2. the command is a read in one of six families, and
 3. that family's reader agent is installed: its name from `READER_FOR_FAMILY` (below) is in
    `reader_roster()`, which lists `~/.claude/agents/*-reader.md`.
@@ -158,13 +161,28 @@ call, and stdout carries one JSON object.
 
 ## Testing
 
-New `tests/test_reader_block.py`, driving the real `hooks/cost-discipline.py pre-tool` with
-harness-shaped payloads on stdin, following `tests/test_read_block_tier.py`:
+New `tests/test_reader_block.py`, with two layers:
+
+- **In-process, for every case below.** Following `tests/test_read_block_tier.py:14-29` and
+  `tests/test_reader_roster.py:44-60`, load the module with importlib, point `HARNESS_DIR` at a
+  temp dir holding the reader files the case needs, and call `handle_pre_tool()` with a
+  harness-shaped payload. Unlike the precedent, `blocks_enabled` is NOT monkeypatched: it is
+  part of the behaviour under test. Only the model lookup it depends on is pinned.
+- **One subprocess smoke test, new and without precedent in `tests/`.** It runs
+  `python3 hooks/cost-discipline.py pre-tool` with the payload on stdin and `HOME` pointed at a
+  temp dir that holds `.claude/agents/gh-reader.md`. For `gh pr list` it asserts exit 0 and
+  exactly one stdout line, parsing to `{"decision":"block", …}`. It covers the argv and stdout
+  path that the in-process layer cannot.
+
+Cases:
 
 | case | expected |
 |---|---|
-| main, one read per family (6) | `decision: block`, reason names the family's reader |
+| main, one read per family (6) | `decision: block`; reason names that family's reader and none of the other five |
 | `pup` read | reason names `datadog-reader` |
+| every block case | reason does not contain `CC_DISCIPLINE_BLOCK` |
+| every block case | stdout is exactly one JSON object (no reflex warning alongside) |
+| Haiku main, a read per family (6) | no block |
 | same call with `agent_type` set | no output |
 | main, a write per family | no block |
 | `gh api -X POST …`, `gh api -X DELETE …`, `gh api … -f body=x`, `gh api graphql -f query='mutation{…}'` | no block |
@@ -182,9 +200,23 @@ harness-shaped payloads on stdin, following `tests/test_read_block_tier.py`:
 | blocked call per family (6), then state read back | streak and aggregate unchanged |
 | `vault` block | reason carries the DEV-only line |
 
-Three arms: the finished tests against `origin/main`, against the branch, and cases that pass
-in both reported separately. What `origin/main` must show for each block case, and why each
-reason is the right one:
+**Three arms, three runs.** The work lands as two commits so that each one can be measured on
+its own:
+
+- **commit A**: the classifier replaces today's detectors, and it still only warns
+- **commit B**: the block
+
+The finished tests run against:
+
+1. **`origin/main`** — the defect as it is today
+2. **commit A** — the detection fixes on their own: mis-flagged commands (`gh api -X POST`,
+   `git commit -m "… kubectl get pods"`, `kubectl delete configmap top`) stop warning, the missed
+   forms (`cd … && gh`, `gh -R`, gcloud, vault) start warning, and every block case is still red,
+   now with a warning in place of a block
+3. **commit B** — everything green
+
+Cases that pass in all three arms guard the change and are reported separately. What
+`origin/main` must show for each block case, and why each reason is the right one:
 
 | block case on `origin/main` | expected output | why |
 |---|---|---|
@@ -192,24 +224,59 @@ reason is the right one:
 | `gcloud` and `vault` reads | nothing at all | no detection on main |
 | `cd … && gh …`, `GH_REPO=… gh …`, `gh -R/--repo …`, `gh search code` | nothing at all | today's gh detection reads the first token only |
 
-A case that fails on main for any other reason (an import error, a crash) is not evidence.
-The "no block" rows mostly pass on both arms. They guard the change and are reported
-separately. The exception is the rows today's detectors mis-flag (`gh api -X POST`,
-`git commit -m "… kubectl get pods"`, `kubectl delete configmap top`): these produce a warning
-on main and no block on the branch, so both arms show no block.
+A case that fails on main for any other reason, such as an import error or a crash, is not
+evidence. The "no block" rows show no block on every arm, because nothing blocks on main or on
+commit A. So they guard commit B and demonstrate nothing about the defect. Commit A's arm is
+where the detection rows are shown to change.
 
 Real artifact: after install, one real `gh pr list` from a live main session must come back
 as a tool error carrying the reason. That is the delivery proof the warn tier never had.
 
-Review: hot-path code, so `feature-dev:code-reviewer` (`model: sonnet`) before merge; its
-findings are reproduced by execution before any fix.
+## Review
+
+Hot-path code: the implementing session dispatches `feature-dev:code-reviewer`
+(`model: sonnet`) once all three arms have run and before it opens the PR. It then reproduces
+each finding by execution before fixing it. The PR body names the reviewer, lists the findings,
+and says which were reproduced and which were refuted. A PR whose body carries no review
+section is not ready to merge, and the operator, who merges, holds it to that.
 
 ## Rollout
 
 The hook runs as the `claude-core-hooks` plugin, so a merge is not an install:
 `claude plugin update claude-core-hooks@claude-core-local`, then a session restart. The
 installed copy was v0.18.2 against v0.19.1 on 2026-09-24, so the update also brings in
-unrelated changes already on main.
+unrelated changes already on main. Whether and when to update is the operator's decision.
+
+## Definition of done
+
+Fleet #120 closes only when all of these hold:
+
+1. all three arms were run, with the results reported in the PR
+2. the review section is present and every finding is reproduced or refuted
+3. the PR is merged
+4. the plugin is updated and the session restarted
+5. the real-artifact `gh pr list` came back as a tool error carrying the reason
+
+If the operator defers the update, #120 stays open and reads "merged, not installed". It is
+never closed on 1–3 alone.
+
+## Known costs and limits, accepted
+
+- **Small reads cost more.** A first-call block adds one main turn plus a reader dispatch, even
+  for a read that would have returned 40 bytes (`gh pr view 5 --json headRefOid -q …`). Today's
+  pup text allows "a single verification query" inline (`:1166-1169`); the block removes that.
+  This is the price of the operator's decision to block from the first call. It is not
+  measured. The Haiku-main exemption above keeps the cheapest case, a Haiku main, from paying
+  it. The kubectl credential-refresh exception in today's text (`:1150-1152`) is not affected,
+  because `gcloud container clusters get-credentials` is not in the gcloud read set.
+- **Callers that cannot dispatch.** A headless `claude -p`, an Agent-SDK loop or a scripted run
+  without the Agent tool would be blocked with no way through. The hook has no reliable signal
+  for this: whether the payload carries the tool list was not established. Such a caller runs
+  with `CC_DISCIPLINE_BLOCK=0`, which is what the switch exists for. The switch is documented
+  here and in the hook's docstring, never in the block text.
+- **Mains that carry `agent_type`.** If the harness sets `agent_type` on a main session started
+  with `--agent`, `is_subagent_call` exempts that whole population. Not measured. It fails open
+  (no block, today's behaviour), not closed.
 
 ## Not in scope
 
