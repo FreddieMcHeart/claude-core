@@ -17,6 +17,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -1136,10 +1137,249 @@ def is_bash_write_command(cmd):
     return False
 
 
-# ---- Reader-reflex table (kubectl / pup / slack / gh) ----------------------------
-# The four inline-read nudges share one shape: STOP-nudge on first hit, then count
-# repeats and escalate at the 3rd. Texts are verbatim from the pre-refactor blocks;
-# add a reader by adding an entry here + one detection branch in handle_pre_tool.
+# ---- Reader-call classifier (fleet #120, 2026-09-24) ------------------------------
+# One classifier for the six CLI families that have a reader agent. It feeds both the
+# block in handle_pre_tool and the READER_REFLEX fallback warning, so the hook never
+# carries two detectors for the same commands. It replaces four per-family checks that
+# were written for a warning, where a false positive cost nothing: kubectl was scanned
+# across the whole string (`git commit -m "... kubectl get ..."` counted as a read) and
+# gh/pup/slack were matched on the first token only (`cd x && gh pr list` was missed).
+# Command position only: split into simple commands, tokenise with shlex (a quoted
+# argument is one token), skip assignments and `env`, then read the verb after the CLI's
+# global flags. Every doubt resolves toward None — a miss costs a warning's worth of
+# context, a false positive refuses a write. The kill switch CC_DISCIPLINE_BLOCK=0 turns
+# the block back into the warning; it is documented here and in blocks_enabled, never in
+# the block text.
+READER_FOR_FAMILY = {
+    "kubectl": "kubectl-reader", "gh": "gh-reader", "pup": "datadog-reader",
+    "slack": "slack-reader", "gcloud": "gcloud-reader", "vault": "vault-reader",
+}
+_CLI_FAMILY = {
+    "kubectl": "kubectl", "gh": "gh", "pup-ro.sh": "pup",
+    "slack-cli.sh": "slack", "gcloud": "gcloud", "vault": "vault",
+}
+# Global flags that take a separate value, per family. `--flag=value` is one token and
+# needs no entry. The token after an UNLISTED flag may be that flag's value, so
+# _positionals marks it unsure and it can never decide a read (the fail-open direction).
+_VALUE_FLAGS = {
+    "kubectl": frozenset({"-n", "--namespace", "--context", "--kubeconfig"}),
+    "gh": frozenset({"-R", "--repo"}),
+    "gcloud": frozenset({"--project", "--account", "--format"}),
+    "vault": frozenset({"-address", "--address", "-namespace", "--namespace"}),
+    "pup": frozenset(),
+    "slack": frozenset(),
+}
+_KUBECTL_READ_VERBS = frozenset({"get", "describe", "logs", "top"})
+_GH_READ_SUBJECTS = frozenset({"pr", "run", "repo", "issue", "release", "workflow"})
+_GH_READ_ACTIONS = frozenset({"view", "list", "diff", "checks", "status"})
+# gh api switches to POST when any of these is present.
+_GH_API_WRITE_FLAGS = frozenset({"-f", "-F", "--field", "--raw-field", "--input"})
+_SLACK_READ_SUBCOMMANDS = frozenset(
+    {"history", "replies", "search", "channels", "users", "unreads"})
+# From gcloud-reader.md's hard boundaries. The verb is the first positional token found in
+# either set, so `gcloud container clusters get-credentials` is a write and
+# `gcloud run services describe x` is a read.
+_GCLOUD_READ_VERBS = frozenset({"list", "describe", "get-iam-policy"})
+_GCLOUD_READ_PREFIXES = frozenset({("logging", "read"), ("config", "get-value"),
+                                   ("asset", "search-all-resources")})
+_GCLOUD_WRITE_VERBS = frozenset({
+    "create", "delete", "deploy", "update", "set", "unset", "enable", "disable", "patch",
+    "add-iam-policy-binding", "remove-iam-policy-binding", "set-iam-policy", "start",
+    "stop", "reset", "resize", "import", "export", "write", "submit", "login", "revoke",
+    "activate-service-account", "get-credentials", "ssh", "scp", "cp", "mv", "rm",
+    "rsync", "access", "add", "remove", "execute", "run", "cancel", "rollback"})
+# What vault-dev-read.sh serves. `vault read` / `vault kv get` are deliberately absent:
+# the reader returns key names, never a value, so it would have to refuse them.
+_VAULT_READ_PAIRS = frozenset({("secrets", "list"), ("auth", "list"), ("kv", "list")})
+_PUNCTUATION = "();<>|&\n"
+_BOUNDARY_CHARS = frozenset(";|&\n")
+_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _is_segment_boundary(tok):
+    """`&&`, `||`, `;`, `|`, `&`, a newline, or a run of them — but not a redirection
+    such as `>&` or `2>&1`'s `>&`, which also consists of punctuation characters."""
+    chars = set(tok)
+    return (chars <= set(_PUNCTUATION) and bool(chars & _BOUNDARY_CHARS)
+            and "<" not in chars and ">" not in chars)
+
+
+def _command_segments(cmd):
+    """Simple commands of `cmd`, each a token list. Raises ValueError on bad quoting.
+
+    A backslash continuation is joined first, so `gh api x \\` + newline + `-X POST` stays
+    one command. A newline is shlex punctuation, not whitespace, so each line is its own
+    command while a newline inside a quoted argument stays inside that token. Both were
+    found by execution on 2026-09-24: with the newline treated as a word character, a
+    `kubectl get` line swallowed the `kubectl delete` on the next line, and a continuation
+    split `-X POST` into a segment of its own — both blocked a write. A heredoc body is
+    data: everything after the line holding `<<` is dropped."""
+    cmd = cmd.replace("\\\n", " ")
+    lines = cmd.split("\n")
+    for i, line in enumerate(lines):
+        if "<<" in line:
+            lines = lines[: i + 1]
+            break
+    lex = shlex.shlex("\n".join(lines), posix=True, punctuation_chars=_PUNCTUATION)
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    seg = []
+    for tok in lex:
+        if _is_segment_boundary(tok):
+            if seg:
+                yield seg
+            seg = []
+        else:
+            seg.append(tok)
+    if seg:
+        yield seg
+
+
+def _command_start(seg):
+    """Index of the command word: past `VAR=value` assignments and an `env` prefix."""
+    i = 0
+    while i < len(seg) and _ASSIGNMENT_RE.match(seg[i]):
+        i += 1
+    if i < len(seg) and seg[i] == "env":
+        i += 1
+        while i < len(seg):
+            if seg[i] in ("-u", "--unset", "-C", "--chdir"):
+                i += 2
+            elif seg[i].startswith("-") or _ASSIGNMENT_RE.match(seg[i]):
+                i += 1
+            else:
+                break
+    return i
+
+
+def _positionals(family, args):
+    """(token, sure) for each non-flag token of `args`, skipping the value of each listed
+    value-taking flag. A token right after an UNLISTED flag without `=` is not sure: it may
+    be that flag's value. Found by review on 2026-09-24 and reproduced: with it taken as a
+    positional, `kubectl --field-selector logs delete pod x` read `logs` as the verb and
+    the delete was refused."""
+    out, i, value_flags, sure = [], 0, _VALUE_FLAGS[family], True
+    while i < len(args):
+        tok = args[i]
+        if tok.startswith("-"):
+            if tok in value_flags:
+                i += 2
+            else:
+                sure = "=" in tok
+                i += 1
+            continue
+        out.append((tok, sure))
+        sure = True
+        i += 1
+    return out
+
+
+def _gh_api_is_read(args):
+    """`gh api` is a read only as a GET. graphql is a read only without `mutation`."""
+    graphql = "graphql" in args
+    if graphql and any("mutation" in t.lower() for t in args):
+        return False
+    for i, tok in enumerate(args):
+        if tok in ("-X", "--method"):
+            if i + 1 >= len(args) or args[i + 1].upper() != "GET":
+                return False
+        elif tok.startswith("--method="):
+            if tok.split("=", 1)[1].upper() != "GET":
+                return False
+        elif tok.startswith("-X") and len(tok) > 2 and tok[2:].upper() != "GET":
+            return False
+    if graphql:
+        return True   # a graphql query always carries -f query=…, so fields are not a write here
+    for tok in args:
+        if tok in _GH_API_WRITE_FLAGS or tok.startswith(("--field=", "--raw-field=", "--input=")):
+            return False
+        if len(tok) > 2 and tok[:2] in ("-f", "-F"):
+            return False
+    return True
+
+
+def _is_reader_read(family, args):
+    """True iff `args` (the tokens after the CLI) are in `family`'s read set."""
+    if "--help" in args or "-h" in args:
+        return False
+    if family == "pup":
+        return True   # pup-ro.sh is read-only by construction
+    marked = _positionals(family, args)
+    pos = [tok if sure else None for tok, sure in marked]   # an unsure token matches nothing
+    if family == "kubectl":
+        return bool(pos) and pos[0] in _KUBECTL_READ_VERBS
+    if family == "gh":
+        if pos[:1] == ["api"]:
+            return _gh_api_is_read(args[args.index("api") + 1:])
+        if pos[:2] == ["search", "code"]:
+            return True
+        return len(pos) >= 2 and pos[0] in _GH_READ_SUBJECTS and pos[1] in _GH_READ_ACTIONS
+    if family == "slack":
+        return bool(pos) and pos[0] in _SLACK_READ_SUBCOMMANDS
+    if family == "gcloud":
+        if tuple(pos[:2]) in _GCLOUD_READ_PREFIXES:
+            return True
+        # The scan uses the raw token so an unsure write verb still counts as a write;
+        # an unsure read verb decides nothing.
+        for tok, sure in marked:
+            if tok in _GCLOUD_WRITE_VERBS:
+                return False
+            if tok in _GCLOUD_READ_VERBS:
+                return sure
+        return False
+    if family == "vault":
+        return pos[:1] in (["status"], ["list"]) or tuple(pos[:2]) in _VAULT_READ_PAIRS
+    return False
+
+
+def classify_reader_call(cmd):
+    """The family (a READER_FOR_FAMILY key) whose reader should serve `cmd`, or None.
+
+    A family is returned only if some simple command is a read of it AND no simple command
+    in the line is a write: one of the six CLIs outside its read set, or a known write per
+    is_bash_write_command. `kubectl rollout restart x && kubectl get pods` is None —
+    splitting a mixed line into a dispatch plus an inline write is the caller's call. A
+    CLI that only appears inside a quoted argument or a heredoc body is never a command."""
+    try:
+        segments = list(_command_segments(cmd or ""))
+    except ValueError:
+        return None   # unbalanced quoting: fail open
+    found = None
+    for seg in segments:
+        i = _command_start(seg)
+        if i >= len(seg) or seg[i] == "cd":
+            continue
+        if is_bash_write_command(" ".join(seg[i:])):
+            return None
+        family = _CLI_FAMILY.get(os.path.basename(seg[i]))
+        if family is None:
+            continue
+        if not _is_reader_read(family, seg[i + 1:]):
+            return None
+        found = found or family
+    return found
+
+
+def reader_block_reason(family, cmd):
+    """Block text for a reader-family read: names only that family's reader and the call.
+    Never mentions the kill switch (see blocks_enabled)."""
+    reader = READER_FOR_FAMILY[family]
+    call = " ".join(cmd.split())[:160]
+    reason = (
+        f"🛑 This is {reader} work — dispatch it instead of running it inline: "
+        f"Agent(subagent_type='{reader}', model='haiku', prompt='RAW: {call}'). "
+        "The reader runs the same read and returns a summary, so the raw output never "
+        "lands in this context. Only this read was refused, and it was not counted.")
+    if family == "vault":
+        reason += (" vault-reader is DEV-only; if this is prod it will refuse — "
+                   "ask the operator instead.")
+    return reason
+
+
+# ---- Reader-reflex table (kubectl / pup / slack / gh / gcloud / vault) ------------
+# The inline-read nudges share one shape: STOP-nudge on first hit, then count
+# repeats and escalate at the 3rd. Detection is classify_reader_call; a new family
+# needs an entry here, in READER_FOR_FAMILY and in _CLI_FAMILY.
 # Each value is (first_msg, escalate_msg). The dict key is the family — it keys both
 # the warning ("<family>_use_reader") and the reader_violations counter.
 READER_REFLEX = {
@@ -1206,6 +1446,25 @@ READER_REFLEX = {
         "Reader dispatch is ~15× cheaper; at current context size each "
         "also re-bills every following turn. "
         "Agent(subagent_type='gh-reader', model='haiku', ...)",
+    ),
+    "gcloud": (
+        "🛑 STOP — dispatch gcloud-reader instead of running gcloud inline. "
+        "gcloud list/describe/get-iam-policy, logging read and config get-value belong in "
+        "the gcloud-reader Haiku sub-agent (summarizes by design). "
+        "Dispatch: `Agent(subagent_type='gcloud-reader', model='haiku', "
+        "prompt='RAW: gcloud <group> <verb> ...')`.",
+        "🚨 Third inline gcloud read this session on an expensive main. "
+        "Agent(subagent_type='gcloud-reader', model='haiku', ...)",
+    ),
+    "vault": (
+        "🛑 STOP — dispatch vault-reader instead of running vault inline. "
+        "vault status and secrets/auth/kv listings belong in the vault-reader Haiku "
+        "sub-agent, which returns key names only. "
+        "Dispatch: `Agent(subagent_type='vault-reader', model='haiku', "
+        "prompt='RAW: vault <verb> ...')`. "
+        "vault-reader is DEV-only; if this is prod it will refuse — ask the operator instead.",
+        "🚨 Third inline vault read this session on an expensive main. "
+        "Agent(subagent_type='vault-reader', model='haiku', ...)",
     ),
 }
 
@@ -3237,6 +3496,18 @@ def handle_pre_tool(payload):
                 "Read gives you offset/limit and peek-first. Transform pipelines "
                 "(cat x | grep y) and heredocs are unaffected.")
             return
+        # Reader-agent block (fleet #120). Placed BEFORE the counting block on purpose:
+        # the counters commit before the old reflex chain is reached, so a block there
+        # would ratchet the streak on a refused call — a defect this hook has had once.
+        # Returning here also keeps the fallback warning off stdout: one JSON object.
+        _reader_family = classify_reader_call(_bcmd)
+        if (_reader_family and blocks_enabled(payload)
+                and READER_FOR_FAMILY[_reader_family] in reader_roster()[0]):
+            save_state(state)
+            log_fire("block_reader_call", session_id, "block",
+                     family=_reader_family, command=_bcmd[:120])
+            emit_block(reader_block_reason(_reader_family, _bcmd))
+            return
         if is_ls_find_as_glob(_bcmd):
             fire_once(state, "bash_ls_find_as_glob",
                 "🔍 `ls`/`find` piped to head/tail/cat is a Glob/Grep substitute. Use Glob "
@@ -3449,99 +3720,18 @@ def handle_pre_tool(payload):
         state["recent_tools"] = state["recent_tools"][-5:]
 
     # ---------- Reader-agent nudges (Bash-pattern specific) ----------
-    # When the main agent emits a Bash command that a dedicated Haiku sub-agent
-    # is designed to handle, fire a one-shot reminder per session. Doesn't block
-    # — inline use is legitimate for one-off lookups, context-switching, and
-    # credential refresh (kubectl). The nudges target multi-call inspection arcs
-    # which are the sub-agents' sweet spot. Skill content can't catch this case
-    # if the relevant skill wasn't loaded this session; hook-level inspection
-    # fires regardless of skill state.
-    #
-    # Three rules, mutually exclusive by command path:
-    #   kubectl_use_reader  → kubectl-reader sub-agent
-    #   pup_use_reader      → datadog-reader sub-agent
-    #   slack_use_reader    → slack-reader sub-agent
+    # Detection is classify_reader_call (fleet #120), shared with the block at the top
+    # of this handler. A read reaching here was NOT blocked — kill switch off, Haiku
+    # main, or the family's reader not installed — so it gets the one-shot warning.
     if tool_name == "Bash":
         cmd_full = tool_input.get("command") or ""
-        cmd_parts = cmd_full.split(maxsplit=2)
-        first = cmd_parts[0] if cmd_parts else ""
-        verb = cmd_parts[1] if len(cmd_parts) >= 2 else ""
+        _family = classify_reader_call(cmd_full)
 
-        # kubectl verb extractor — handles flags-before-verb and compound commands.
-        #
-        # Real-world pattern:
-        #   kubectl --context "arn:aws:..." -n risk-engine get pods
-        # splits as first="kubectl", verb="--context" → the old check failed.
-        # Also handles compound forms like:
-        #   export PATH=".../gcloud-sdk/bin:$PATH"\nkubectl --context=... get pods
-        # where first="export", not "kubectl".
-        #
-        # Algorithm: find the "kubectl" token anywhere in the command, then walk
-        # forward skipping flags (both --flag value and --flag=value forms) until
-        # a known read verb is found. Returns "" if no read verb found (e.g.
-        # kubectl config use-context, kubectl delete, kubectl exec — all stay inline).
-        _KUBECTL_READ_VERBS = frozenset({"get", "describe", "logs", "top"})
-
-        def _kubectl_read_verb(cmd: str) -> str:
-            # Normalise shell syntax so "kubectl" is always a standalone token:
-            # - compound operators: && ; | (pipe) — split command chains
-            # - subshell/expansion: $( ` — kubectl appears right after these
-            # - assignment prefix: VAR=$(kubectl → strip $( → "VAR= kubectl"
-            tokens = (cmd
-                      .replace("\n", " ")
-                      .replace("&&", " ").replace(";", " ").replace("|", " ")
-                      .replace("$(", " ").replace("`", " ")
-                      ).split()
-            for i, t in enumerate(tokens):
-                if t != "kubectl":
-                    continue
-                j = i + 1
-                while j < len(tokens):
-                    tok = tokens[j]
-                    if tok in _KUBECTL_READ_VERBS:
-                        return tok
-                    if tok.startswith("-"):
-                        # --flag=value: single token, skip just it
-                        # --flag value or -f value: two tokens, skip both
-                        if "=" not in tok:
-                            j += 2
-                            continue
-                    j += 1
-            return ""
-
-        _kubectl_verb = _kubectl_read_verb(cmd_full)
-
-        # gh has a 3-token nested-verb structure (e.g. "gh pr view 4344"), so
-        # we reparse with maxsplit=3 to inspect both subject and action.
-        # READ patterns only — writes (create/merge/edit/comment/clone/auth)
-        # stay silent because we don't want to nudge on write actions and we
-        # don't want wiki_first firing during legitimate `gh auth login`.
-        is_gh_read = False
-        if first == "gh":
-            gh_parts = cmd_full.split(maxsplit=3)
-            gh_subject = gh_parts[1] if len(gh_parts) >= 2 else ""
-            gh_action = gh_parts[2] if len(gh_parts) >= 3 else ""
-            is_gh_read = (
-                gh_subject == "api"
-                or (gh_subject in ("pr", "run", "repo", "issue", "release",
-                                   "workflow", "search")
-                    and gh_action in ("view", "list", "diff", "checks", "status"))
-            )
-
-        # Wiki-first precondition: incident-investigation tools should be
-        # preceded by a wiki grep. Detect the incident-tool patterns (kubectl
-        # read / pup-ro.sh / slack-cli.sh read / gh read) and fire if no wiki
-        # Read has happened in this session. Self-disables once
-        # wiki_read_count > 0 (any tool call touching the configured wiki path
-        # increments it).
-        _is_incident = (
-            bool(_kubectl_verb)
-            or first.endswith("/pup-ro.sh")
-            or (first.endswith("/slack-cli.sh") and verb in (
-                "history", "replies", "search", "channels", "users", "unreads"))
-            or is_gh_read
-        )
-        if _is_incident and state.get("wiki_read_count", 0) == 0:
+        # Wiki-first precondition: incident-investigation tools should be preceded by a
+        # wiki grep. Kept to the four families it has always covered (gcloud and vault
+        # joined the classifier on 2026-09-24, not this nudge). Self-disables once
+        # wiki_read_count > 0.
+        if _family in ("kubectl", "pup", "slack", "gh") and state.get("wiki_read_count", 0) == 0:
             fire_once(state, "wiki_first",
                 "🔍 Wiki check missing. About to run an incident-investigation tool "
                 "(kubectl/pup/slack-cli/gh read), but no wiki Read in this session yet. "
@@ -3552,21 +3742,10 @@ def handle_pre_tool(payload):
                 "per-service runbooks often short-circuit hours of debugging. "
                 "Self-disables after the first wiki Read this session.")
 
-        # Reader-reflex chain — detection stays inline here; the nudge + escalation
-        # shape is table-driven (READER_REFLEX / fire_reader_reflex). Exemptions are
-        # carried by the conditions themselves: _kubectl_verb is read-verbs-only
-        # (config/delete/exec/apply returned "" upstream); pup-ro.sh is read-only by
-        # construction; slack matches read subcommands only (writes stay inline — the
-        # reader refuses them); is_gh_read excludes pr create/merge/edit, api -X POST…
-        if _kubectl_verb:
-            fire_reader_reflex(state, "kubectl")
-        elif first.endswith("/pup-ro.sh"):
-            fire_reader_reflex(state, "pup")
-        elif first.endswith("/slack-cli.sh") and verb in (
-                "history", "replies", "search", "channels", "users", "unreads"):
-            fire_reader_reflex(state, "slack")
-        elif is_gh_read:
-            fire_reader_reflex(state, "gh")
+        # Fallback warning. Sub-agent calls pass silently — the reader itself runs these
+        # commands.
+        if _family and not is_subagent_call(payload):
+            fire_reader_reflex(state, _family)
 
     # ---------- grep_use_lsp: prefer LSP for symbol-shaped searches on code ----------
     # Added 2026-06-12: blind LSP test showed Sonnet used Read+bash-grep 0/3 when the
