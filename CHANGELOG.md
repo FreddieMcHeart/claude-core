@@ -2,6 +2,50 @@
 
 <!-- version list -->
 
+## v0.20.0 (2026-09-25)
+
+### Bug Fixes
+
+- **hooks**: Classify reader calls by command position
+  ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+- **hooks**: Never take an unlisted flag's value for the read verb
+  ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+### Documentation
+
+- **plan**: Implementation plan for the reader-agent block
+  ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+- **plan**: Make newlines and continuations segment boundaries
+  ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+- **spec**: Close remaining reader-block review findings
+  ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+- **spec**: Fix reader-block design after adversarial review
+  ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+- **spec**: Fix reader-block evidence, arms, kill switch and gcloud set
+  ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+- **spec**: Reader-agent block design ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+### Features
+
+- **hooks**: Block inline reads that have a reader agent
+  ([#72](https://github.com/FreddieMcHeart/claude-core/pull/72),
+  [`99fae65`](https://github.com/FreddieMcHeart/claude-core/commit/99fae654cbfca730e87e487158554a686a36bef6))
+
+
 ## v0.19.1 (2026-09-24)
 
 ### Bug Fixes
